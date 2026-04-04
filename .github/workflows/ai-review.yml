@@ -1,0 +1,79 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: Review PR with GitHub Models
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate diff
+        id: diff
+        run: |
+          git diff origin/main...HEAD > pr.diff
+          echo "diff_size=$(wc -c < pr.diff)" >> $GITHUB_OUTPUT
+
+      - name: Read Copilot instructions
+        id: context
+        run: |
+          CONTEXT=$(cat .github/copilot-instructions.md)
+          echo "context<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTEXT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Run AI review via GitHub Models
+        id: ai_review
+        run: |
+          DIFF=$(cat pr.diff | head -c 12000)  # cap to avoid token limits
+
+          RESPONSE=$(curl -s -X POST \
+            "https://models.inference.ai.azure.com/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -d "$(jq -n \
+              --arg context "${{ steps.context.outputs.context }}" \
+              --arg diff "$DIFF" \
+              '{
+                model: "gpt-4o",
+                messages: [
+                  {
+                    role: "system",
+                    content: ("You are a senior engineer reviewing a PR for The Machine, a multi-provider AI agent platform.\n\nProject conventions:\n" + $context + "\n\nReview the diff for:\n- Correctness and logic errors\n- Security issues (hardcoded secrets, SQL injection, XSS, missing auth checks)\n- Violations of project conventions (LiteLLM imports, localStorage tokens, missing type hints, synchronous DB calls)\n- Missing or inadequate tests\n- Unnecessary complexity\n\nBe concise. Only flag real issues — do not invent problems.\n\nFormat your response exactly as:\n## Summary\n(1-3 sentences describing what changed)\n\n## Concerns\n(bullet list of issues, or \"None\" if clean)\n\n## Suggestions\n(bullet list of non-blocking improvements, or \"None\")\n\n## Verdict\n(one of: ✅ Looks good | ⚠️ Minor issues | 🚫 Needs changes)")
+                  },
+                  {
+                    role: "user",
+                    content: ("PR diff:\n```\n" + $diff + "\n```")
+                  }
+                ],
+                max_tokens: 1000,
+                temperature: 0.2
+              }')")
+
+          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "AI review unavailable."')
+          echo "review<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post review comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const review = `${{ steps.ai_review.outputs.review }}`;
+            const body = `### 🤖 AI Code Review\n\n${review}\n\n---\n<sub>Reviewed by [GitHub Models](https://github.com/marketplace/models) (gpt-4o) · Not a substitute for human review</sub>`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });

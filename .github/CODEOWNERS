@@ -1,0 +1,6 @@
+# Global owner — all PRs require review
+* @samchereddy
+
+# Encryption is sensitive — explicit sign-off required
+backend/app/core/encryption.py @samchereddy
+supabase/migrations/ @samchereddy
