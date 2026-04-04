@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     supabase_service_key: str
     server_secret: str
     storage_bucket: str = "knowledge"
+    database_url: str | None = None  # postgres://... required for migrations + direct DB access
 
     # CORS — tighten in production
     allowed_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
