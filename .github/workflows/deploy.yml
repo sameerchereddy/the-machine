@@ -8,7 +8,7 @@ jobs:
     name: Deploy backend → Fly.io
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: deploy-backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup frontend
         uses: ./.github/actions/setup-frontend
