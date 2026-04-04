@@ -16,20 +16,26 @@ backend/app/
   main.py           — FastAPI app entry point, CORS, routers registered here
   core/
     config.py       — pydantic-settings, all env vars
+    security.py     — Supabase admin client, verify_token()
+    deps.py         — get_current_user dependency, CurrentUser type alias
     encryption.py   — AES-256-GCM encrypt/decrypt (add in Cycle 3)
-    auth.py         — JWT validation middleware (add in Cycle 2)
+  api/
+    auth.py         — POST /api/auth/login, /logout, GET /me
   llm/
     adapter.py      — BaseProvider, ProviderWithRetry, build_adapter factory
     types.py        — LLMResponse, StreamChunk, ToolCall, Usage
     providers/      — one file per provider SDK
   agent/            — ReAct loop (add in Cycle 5)
   tools/            — tool implementations (add in Cycle 5)
-  routers/          — API route handlers, one file per domain
 
 frontend/src/
   pages/            — one file per route
   components/       — reusable UI components
-  lib/utils.ts      — cn() helper for Tailwind class merging
+  context/
+    AuthContext.tsx — AuthProvider, useAuth hook
+  lib/
+    supabase.ts     — Supabase client singleton
+    utils.ts        — cn() helper for Tailwind class merging
 ```
 
 ## Non-negotiable conventions

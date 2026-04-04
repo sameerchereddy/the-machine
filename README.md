@@ -59,18 +59,27 @@ No LangChain. No external observability service. No vendor picking your model.
 ## Quick Start
 
 ```bash
-git clone https://github.com/your-handle/the-machine.git
+git clone https://github.com/sameerchereddy/the-machine.git
 cd the-machine
 
-cp .env.example .env
+# Backend env
+cp .env.example backend/.env
 # Fill in SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SERVER_SECRET
 
-docker-compose up -d          # local Postgres + pgvector
+# Frontend env
+cp .env.example frontend/.env.local
+# Fill in VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_API_BASE_URL
 
+# Apply database schema
+supabase link --project-ref <your-project-ref>
+supabase db push
+
+# Backend
 cd backend
 pip install -e ".[dev]"
 uvicorn app.main:app --reload  # http://localhost:8000
 
+# Frontend (separate terminal)
 cd ../frontend
 npm install
 npm run dev                    # http://localhost:5173
@@ -88,7 +97,7 @@ npm run dev                    # http://localhost:5173
 | Database | Supabase Postgres + pgvector |
 | LLM routing | Custom provider adapter (no LangChain, no LiteLLM) |
 | Encryption | AES-256-GCM, per-user envelope encryption |
-| Deploy | Railway (backend) + Vercel (frontend) |
+| Deploy | Fly.io (backend) + Vercel (frontend) |
 
 ---
 
