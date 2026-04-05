@@ -1,6 +1,7 @@
 """Unit tests for AES-256-GCM encryption helpers."""
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 # Patch settings before importing encryption so the module-level settings load works
 _FAKE_SETTINGS_ATTRS = {
@@ -28,7 +29,6 @@ def _patch_settings():
 
 
 from app.core.encryption import decrypt, encrypt  # noqa: E402
-
 
 USER_A = "00000000-0000-0000-0000-000000000001"
 USER_B = "00000000-0000-0000-0000-000000000002"
