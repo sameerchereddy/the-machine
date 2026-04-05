@@ -78,7 +78,7 @@ class ProviderWithRetry:
                 last_exc = exc
                 if attempt < self.max_retries and self._is_retryable(exc):
                     logger.warning(f"Stream attempt {attempt + 1} failed ({exc}), retrying...")
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                     continue
                 break
 
@@ -106,7 +106,7 @@ class ProviderWithRetry:
                 last_exc = exc
                 if attempt < self.max_retries and self._is_retryable(exc):
                     logger.warning(f"Attempt {attempt + 1} failed ({exc}), retrying...")
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                     continue
                 break
 
@@ -132,18 +132,23 @@ def get_provider(config: dict[str, Any]) -> BaseProvider:
 
     if provider in ("openai", "grok", "ollama", "custom"):
         from .providers.openai_compat import OpenAICompatProvider
+
         return OpenAICompatProvider(config)
     elif provider == "azure":
         from .providers.openai_compat import AzureProvider
+
         return AzureProvider(config)
     elif provider == "anthropic":
         from .providers.anthropic import AnthropicProvider
+
         return AnthropicProvider(config)
     elif provider == "gemini":
         from .providers.gemini import GeminiProvider
+
         return GeminiProvider(config)
     elif provider == "bedrock":
         from .providers.bedrock import BedrockProvider
+
         return BedrockProvider(config)
     else:
         raise ValueError(f"Unknown provider: '{provider}'")

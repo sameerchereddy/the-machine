@@ -196,6 +196,23 @@ export default function SetupPage() {
         setSaveError(body.detail ?? 'Failed to save config.')
         return
       }
+      const saved = await res.json()
+
+      // If this is the first config, auto-create a default agent and onboard
+      if (configs.length === 0) {
+        const agentRes = await fetch(`${API}/api/agents`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My First Agent', llm_config_id: saved.id }),
+        })
+        if (agentRes.ok) {
+          const agent = await agentRes.json()
+          navigate(`/agents/${agent.id}`)
+          return
+        }
+      }
+
       await fetchConfigs()
       resetForm()
     } finally {

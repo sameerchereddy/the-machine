@@ -19,6 +19,7 @@ class GeminiProvider(BaseProvider):
     def _convert_tools(self, tools: list[dict[str, Any]]) -> list[Any]:
         """Convert OpenAI function-calling format → Gemini Tool objects."""
         from google.generativeai.types import FunctionDeclaration, Tool
+
         declarations = [
             FunctionDeclaration(
                 name=t["function"]["name"],
@@ -29,9 +30,7 @@ class GeminiProvider(BaseProvider):
         ]
         return [Tool(function_declarations=declarations)]
 
-    def _convert_messages(
-        self, messages: list[dict[str, Any]]
-    ) -> tuple[str, list[dict[str, Any]]]:
+    def _convert_messages(self, messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
         """
         Split system prompt out and convert remaining messages to Gemini format.
         Returns (system_instruction, gemini_history).
@@ -85,11 +84,13 @@ class GeminiProvider(BaseProvider):
                 content += part.text
             elif hasattr(part, "function_call"):
                 fc = part.function_call
-                tool_calls.append(ToolCall(
-                    id=fc.name,
-                    name=fc.name,
-                    arguments=dict(fc.args),
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=fc.name,
+                        name=fc.name,
+                        arguments=dict(fc.args),
+                    )
+                )
 
         meta = response.usage_metadata
         return LLMResponse(
@@ -131,11 +132,13 @@ class GeminiProvider(BaseProvider):
                     yield StreamChunk(delta=part.text)
                 elif hasattr(part, "function_call"):
                     fc = part.function_call
-                    tool_calls.append(ToolCall(
-                        id=fc.name,
-                        name=fc.name,
-                        arguments=dict(fc.args),
-                    ))
+                    tool_calls.append(
+                        ToolCall(
+                            id=fc.name,
+                            name=fc.name,
+                            arguments=dict(fc.args),
+                        )
+                    )
 
         if tool_calls:
             yield StreamChunk(finish_reason="tool_calls", tool_calls=tool_calls)

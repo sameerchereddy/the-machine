@@ -33,7 +33,9 @@ def login(body: LoginRequest, response: Response) -> dict[str, object]:
         try:
             user = verify_token(body.access_token)
         except Exception:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from None
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+            ) from None
         _set_auth_cookie(response, body.access_token)
         return {"user": user}
 

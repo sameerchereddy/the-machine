@@ -1,4 +1,5 @@
 """Unit tests for AES-256-GCM encryption helpers."""
+
 from unittest.mock import patch
 
 import pytest

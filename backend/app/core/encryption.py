@@ -6,6 +6,7 @@ Each encrypt call generates a random 12-byte nonce (IV).
 AAD = f"{user_id}:{config_id}" binds each ciphertext to its owner row,
 preventing blob-swapping attacks even with DB write access.
 """
+
 import hashlib
 import hmac
 import json

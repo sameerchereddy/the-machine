@@ -4,6 +4,7 @@ LLM Config CRUD + ping endpoints.
 All routes are protected — requires valid session cookie.
 Credentials are AES-256-GCM encrypted before storage.
 """
+
 import uuid
 from typing import Any
 
@@ -69,6 +70,7 @@ class LLMConfigResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _get_conn() -> asyncpg.Connection:
     if not settings or not settings.database_url:
         raise HTTPException(
@@ -83,7 +85,9 @@ def _parse_uuid(value: str) -> uuid.UUID:
     try:
         return uuid.UUID(value)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found") from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Config not found"
+        ) from None
 
 
 def _mask_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -112,6 +116,7 @@ def _row_to_response(row: asyncpg.Record, config: dict[str, Any]) -> LLMConfigRe
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("", response_model=list[LLMConfigResponse])
 async def list_configs(current_user: CurrentUser) -> list[LLMConfigResponse]:
@@ -220,7 +225,9 @@ async def update_config(
             if body.supports_tool_calls is not None
             else row["supports_tool_calls"]
         )
-        context_window = body.context_window if body.context_window is not None else row["context_window"]
+        context_window = (
+            body.context_window if body.context_window is not None else row["context_window"]
+        )
 
         if body.config is not None:
             config_enc, config_iv = encrypt(body.config, user_id, config_id)
@@ -282,6 +289,7 @@ async def delete_config(config_id: str, current_user: CurrentUser) -> None:
 # ---------------------------------------------------------------------------
 # Ping — test credentials by sending a minimal request to the provider
 # ---------------------------------------------------------------------------
+
 
 class PingRequest(BaseModel):
     provider: str
@@ -443,8 +451,11 @@ async def _ping_bedrock(model: str, config: dict[str, Any]) -> None:
         await client.invoke_model(
             modelId=model,
             body=_json.dumps(
-                {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 1,
-                 "messages": [{"role": "user", "content": "hi"}]}
+                {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
             ),
             contentType="application/json",
             accept="application/json",

@@ -17,9 +17,7 @@ class AnthropicProvider(BaseProvider):
     # Format converters
     # ------------------------------------------------------------------
 
-    def _split_system(
-        self, messages: list[dict[str, Any]]
-    ) -> tuple[str, list[dict[str, Any]]]:
+    def _split_system(self, messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
         """Anthropic requires the system prompt as a top-level param, not in messages."""
         system = ""
         rest = []
@@ -74,11 +72,13 @@ class AnthropicProvider(BaseProvider):
             if block.type == "text":
                 content = block.text
             elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    arguments=block.input,
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        arguments=block.input,
+                    )
+                )
 
         return LLMResponse(
             content=content,
@@ -149,5 +149,7 @@ class AnthropicProvider(BaseProvider):
                             prompt_tokens=usage.input_tokens,
                             completion_tokens=usage.output_tokens,
                             total_tokens=usage.input_tokens + usage.output_tokens,
-                        ) if usage else None,
+                        )
+                        if usage
+                        else None,
                     )

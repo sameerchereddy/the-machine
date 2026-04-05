@@ -1742,6 +1742,7 @@ updates:
 ### Cycle 5 — Agent Runtime
 **Goal**: a user can launch an agent, send a message, and get a streaming response with real tool use.
 
+- Frontend tests: `AuthContext` (syncCookie called on getSession + onAuthStateChange), `ProtectedRoute` (401 redirect loop regression), `AgentsPage` (401 → navigate without remount loop)
 - ReAct loop: Reason → Act (parallel tool calls) → Observe → Respond, max iterations enforced
 - Tool result injection: canonical internal format, each provider adapter converts back to its own message format
 - All 5 default tools implemented: `calculator`, `current_datetime`, `url_reader`, `wikipedia_search`, `web_search`

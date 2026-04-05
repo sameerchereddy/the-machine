@@ -6,6 +6,7 @@ Handles all OpenAI-compatible providers:
   - Custom           — any OpenAI-compatible endpoint
   - Azure OpenAI     — same SDK, different client class
 """
+
 import json
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -22,7 +23,7 @@ class OpenAICompatProvider(BaseProvider):
         self.provider = config["provider"]
         self.client = openai.AsyncOpenAI(
             api_key=config.get("api_key", "ollama"),  # ollama ignores the key
-            base_url=config.get("base_url"),          # None → OpenAI default
+            base_url=config.get("base_url"),  # None → OpenAI default
         )
 
     async def complete(
@@ -49,11 +50,13 @@ class OpenAICompatProvider(BaseProvider):
         tool_calls = []
         if msg.tool_calls:
             for tc in msg.tool_calls:
-                tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=json.loads(tc.function.arguments),
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=json.loads(tc.function.arguments),
+                    )
+                )
 
         return LLMResponse(
             content=msg.content or "",
@@ -95,7 +98,7 @@ class OpenAICompatProvider(BaseProvider):
                         yield StreamChunk(
                             usage=Usage(
                                 prompt_tokens=chunk.usage.prompt_tokens,
-                completion_tokens=chunk.usage.completion_tokens,
+                                completion_tokens=chunk.usage.completion_tokens,
                                 total_tokens=chunk.usage.total_tokens,
                             )
                         )
