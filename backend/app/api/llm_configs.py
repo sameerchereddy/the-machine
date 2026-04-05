@@ -422,6 +422,7 @@ async def _ping_ollama(model: str, config: dict[str, Any]) -> None:
                 "model": model,
                 "messages": [{"role": "user", "content": "hi"}],
                 "stream": False,
+                "options": {"num_predict": 1},
             },
             timeout=15,
         )
