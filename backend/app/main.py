@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
+from app.api.llm_configs import router as llm_configs_router
 from app.core.config import settings
 from app.core.migrations import run_pending_migrations
 
@@ -31,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(llm_configs_router)
 
 
 @app.get("/health", tags=["system"])

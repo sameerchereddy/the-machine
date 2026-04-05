@@ -81,6 +81,11 @@ ignore_errors = true
 module = "app.llm.providers.bedrock"
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+# ping helpers import optional SDKs dynamically; type: ignore needed for SDK variance
+module = "app.api.llm_configs"
+ignore_errors = true
+
 # ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
