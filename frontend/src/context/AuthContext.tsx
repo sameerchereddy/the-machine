@@ -41,7 +41,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session) await syncCookie(session.access_token)
+      try {
+        if (session) await syncCookie(session.access_token)
+      } catch { /* cookie sync failed — proceed anyway */ }
       setUser(session?.user ?? null)
     })
 
