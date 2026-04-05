@@ -78,6 +78,14 @@ async def _get_conn() -> asyncpg.Connection:
     return await asyncpg.connect(settings.database_url)
 
 
+def _parse_uuid(value: str) -> uuid.UUID:
+    """Parse a UUID string, raising 404 on invalid format."""
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found") from None
+
+
 def _mask_config(config: dict[str, Any]) -> dict[str, Any]:
     """Replace sensitive key values with a masked string."""
     masked = dict(config)
@@ -116,7 +124,8 @@ async def list_configs(current_user: CurrentUser) -> list[LLMConfigResponse]:
         )
         result = []
         for row in rows:
-            config = decrypt(bytes(row["config_enc"]), bytes(row["config_iv"]), user_id)
+            config_id = str(row["id"])
+            config = decrypt(bytes(row["config_enc"]), bytes(row["config_iv"]), user_id, config_id)
             result.append(_row_to_response(row, config))
         return result
     finally:
@@ -132,7 +141,9 @@ async def create_config(body: LLMConfigCreate, current_user: CurrentUser) -> LLM
             detail=f"Unknown provider '{body.provider}'. Must be one of: {sorted(PROVIDERS)}",
         )
 
-    config_enc, config_iv = encrypt(body.config, user_id)
+    # Generate the ID client-side so we can bind AAD before the insert
+    new_id = uuid.uuid4()
+    config_enc, config_iv = encrypt(body.config, user_id, str(new_id))
 
     conn = await _get_conn()
     try:
@@ -145,11 +156,12 @@ async def create_config(body: LLMConfigCreate, current_user: CurrentUser) -> LLM
             row = await conn.fetchrow(
                 """
                 INSERT INTO llm_configs
-                    (user_id, name, provider, model, is_default,
+                    (id, user_id, name, provider, model, is_default,
                      supports_tool_calls, context_window, config_enc, config_iv)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                 RETURNING *
                 """,
+                new_id,
                 uuid.UUID(user_id),
                 body.name,
                 body.provider,
@@ -172,12 +184,12 @@ async def get_config(config_id: str, current_user: CurrentUser) -> LLMConfigResp
     try:
         row = await conn.fetchrow(
             "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
-            uuid.UUID(config_id),
+            _parse_uuid(config_id),
             uuid.UUID(user_id),
         )
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found")
-        config = decrypt(bytes(row["config_enc"]), bytes(row["config_iv"]), user_id)
+        config = decrypt(bytes(row["config_enc"]), bytes(row["config_iv"]), user_id, config_id)
         return _row_to_response(row, config)
     finally:
         await conn.close()
@@ -192,13 +204,12 @@ async def update_config(
     try:
         row = await conn.fetchrow(
             "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
-            uuid.UUID(config_id),
+            _parse_uuid(config_id),
             uuid.UUID(user_id),
         )
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found")
 
-        # Build updated values
         name = body.name if body.name is not None else row["name"]
         model = body.model if body.model is not None else row["model"]
         is_default = body.is_default if body.is_default is not None else row["is_default"]
@@ -210,19 +221,19 @@ async def update_config(
         context_window = body.context_window if body.context_window is not None else row["context_window"]
 
         if body.config is not None:
-            config_enc, config_iv = encrypt(body.config, user_id)
+            config_enc, config_iv = encrypt(body.config, user_id, config_id)
             new_config = body.config
         else:
             config_enc = bytes(row["config_enc"])
             config_iv = bytes(row["config_iv"])
-            new_config = decrypt(config_enc, config_iv, user_id)
+            new_config = decrypt(config_enc, config_iv, user_id, config_id)
 
         async with conn.transaction():
             if is_default:
                 await conn.execute(
                     "UPDATE llm_configs SET is_default = false WHERE user_id = $1 AND id != $2",
                     uuid.UUID(user_id),
-                    uuid.UUID(config_id),
+                    _parse_uuid(config_id),
                 )
             updated = await conn.fetchrow(
                 """
@@ -241,7 +252,7 @@ async def update_config(
                 context_window,
                 config_enc,
                 config_iv,
-                uuid.UUID(config_id),
+                _parse_uuid(config_id),
                 uuid.UUID(user_id),
             )
         return _row_to_response(updated, new_config)  # type: ignore[arg-type]
@@ -256,7 +267,7 @@ async def delete_config(config_id: str, current_user: CurrentUser) -> None:
     try:
         result = await conn.execute(
             "DELETE FROM llm_configs WHERE id = $1 AND user_id = $2",
-            uuid.UUID(config_id),
+            _parse_uuid(config_id),
             uuid.UUID(user_id),
         )
         if result == "DELETE 0":
@@ -287,7 +298,7 @@ async def ping_credentials(body: PingRequest, current_user: CurrentUser) -> dict
         latency_ms = await _ping_provider(body.provider, body.model, body.config)
         return {"ok": True, "latency_ms": latency_ms}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": _sanitize_error(exc)}
 
 
 @router.post("/{config_id}/ping")
@@ -298,12 +309,12 @@ async def ping_config(config_id: str, current_user: CurrentUser) -> dict[str, ob
     try:
         row = await conn.fetchrow(
             "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
-            uuid.UUID(config_id),
+            _parse_uuid(config_id),
             uuid.UUID(user_id),
         )
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found")
-        config = decrypt(bytes(row["config_enc"]), bytes(row["config_iv"]), user_id)
+        config = decrypt(bytes(row["config_enc"]), bytes(row["config_iv"]), user_id, config_id)
     finally:
         await conn.close()
 
@@ -314,7 +325,23 @@ async def ping_config(config_id: str, current_user: CurrentUser) -> dict[str, ob
         latency_ms = await _ping_provider(provider, model, config)
         return {"ok": True, "latency_ms": latency_ms}
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": _sanitize_error(exc)}
+
+
+def _sanitize_error(exc: Exception) -> str:
+    """
+    Return a safe error message stripped of any credentials or request IDs.
+    We surface the HTTP status code and provider error type when available,
+    but never raw exception details that might include partial keys or URLs.
+    """
+    msg = str(exc)
+    # Extract just the status code + message type if it looks like an API error
+    for marker in ("Error code:", "status_code=", "HTTP Error"):
+        if marker in msg:
+            # Return up to the first newline — status line only
+            return msg.split("\n")[0][:200]
+    # Generic fallback — don't leak internal details
+    return "Provider request failed. Check your credentials and model name."
 
 
 async def _ping_provider(provider: str, model: str, config: dict[str, Any]) -> float:
@@ -391,7 +418,6 @@ async def _ping_ollama(model: str, config: dict[str, Any]) -> None:
                 "model": model,
                 "messages": [{"role": "user", "content": "hi"}],
                 "stream": False,
-                "options": {"num_predict": 1},
             },
             timeout=15,
         )

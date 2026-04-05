@@ -32,39 +32,51 @@ from app.core.encryption import decrypt, encrypt  # noqa: E402
 
 USER_A = "00000000-0000-0000-0000-000000000001"
 USER_B = "00000000-0000-0000-0000-000000000002"
+CFG_1 = "cfg-0000-0000-0000-000000000001"
+CFG_2 = "cfg-0000-0000-0000-000000000002"
 
 
 def test_round_trip():
     data = {"api_key": "sk-test-1234", "base_url": "https://api.openai.com"}
-    ciphertext, nonce = encrypt(data, USER_A)
-    recovered = decrypt(ciphertext, nonce, USER_A)
+    ciphertext, nonce = encrypt(data, USER_A, CFG_1)
+    recovered = decrypt(ciphertext, nonce, USER_A, CFG_1)
     assert recovered == data
 
 
 def test_nonce_is_random():
     data = {"api_key": "same"}
-    _, nonce1 = encrypt(data, USER_A)
-    _, nonce2 = encrypt(data, USER_A)
-    assert nonce1 != nonce2  # Each call uses a fresh nonce
+    _, nonce1 = encrypt(data, USER_A, CFG_1)
+    _, nonce2 = encrypt(data, USER_A, CFG_1)
+    assert nonce1 != nonce2
 
 
 def test_different_users_cannot_decrypt_each_others_data():
     from cryptography.exceptions import InvalidTag
 
     data = {"api_key": "secret"}
-    ciphertext, nonce = encrypt(data, USER_A)
+    ciphertext, nonce = encrypt(data, USER_A, CFG_1)
     with pytest.raises(InvalidTag):
-        decrypt(ciphertext, nonce, USER_B)
+        decrypt(ciphertext, nonce, USER_B, CFG_1)
+
+
+def test_different_config_ids_cannot_decrypt():
+    """AAD check: blob cannot be moved to a different row."""
+    from cryptography.exceptions import InvalidTag
+
+    data = {"api_key": "secret"}
+    ciphertext, nonce = encrypt(data, USER_A, CFG_1)
+    with pytest.raises(InvalidTag):
+        decrypt(ciphertext, nonce, USER_A, CFG_2)
 
 
 def test_tampered_ciphertext_raises():
     from cryptography.exceptions import InvalidTag
 
     data = {"x": 1}
-    ciphertext, nonce = encrypt(data, USER_A)
+    ciphertext, nonce = encrypt(data, USER_A, CFG_1)
     tampered = bytes([ciphertext[0] ^ 0xFF]) + ciphertext[1:]
     with pytest.raises(InvalidTag):
-        decrypt(tampered, nonce, USER_A)
+        decrypt(tampered, nonce, USER_A, CFG_1)
 
 
 def test_complex_nested_dict():
@@ -73,5 +85,5 @@ def test_complex_nested_dict():
         "nested": {"a": 1, "b": [1, 2, 3]},
         "unicode": "héllo wörld",
     }
-    ciphertext, nonce = encrypt(data, USER_A)
-    assert decrypt(ciphertext, nonce, USER_A) == data
+    ciphertext, nonce = encrypt(data, USER_A, CFG_1)
+    assert decrypt(ciphertext, nonce, USER_A, CFG_1) == data

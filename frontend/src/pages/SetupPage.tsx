@@ -125,15 +125,16 @@ export default function SetupPage() {
   const [testing, setTesting] = useState(false)
   const [pingResult, setPingResult] = useState<{ ok: boolean; latency_ms?: number; error?: string } | null>(null)
   const [saveError, setSaveError] = useState('')
+  const [listError, setListError] = useState('')
 
-  useEffect(() => {
-    fetchConfigs()
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchConfigs() }, [])
 
   async function fetchConfigs() {
     setLoadingConfigs(true)
     try {
       const res = await fetch(`${API}/api/llm-configs`, { credentials: 'include' })
+      if (res.status === 401) { navigate('/login'); return }
       if (res.ok) setConfigs(await res.json())
     } finally {
       setLoadingConfigs(false)
@@ -224,20 +225,24 @@ export default function SetupPage() {
   }
 
   async function handleSetDefault(id: string) {
-    await fetch(`${API}/api/llm-configs/${id}`, {
+    setListError('')
+    const res = await fetch(`${API}/api/llm-configs/${id}`, {
       method: 'PATCH',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_default: true }),
     })
+    if (!res.ok) { setListError('Failed to update default. Please try again.'); return }
     await fetchConfigs()
   }
 
   async function handleDelete(id: string) {
-    await fetch(`${API}/api/llm-configs/${id}`, {
+    setListError('')
+    const res = await fetch(`${API}/api/llm-configs/${id}`, {
       method: 'DELETE',
       credentials: 'include',
     })
+    if (!res.ok) { setListError('Failed to delete config. Please try again.'); return }
     await fetchConfigs()
   }
 
@@ -259,6 +264,8 @@ export default function SetupPage() {
             Connect an LLM provider to power your agents.
           </p>
         </div>
+
+        {listError && <p className="text-sm text-destructive">{listError}</p>}
 
         {/* Existing configs */}
         {loadingConfigs && (
