@@ -180,11 +180,12 @@ async def create_config(body: LLMConfigCreate, current_user: CurrentUser) -> LLM
 @router.get("/{config_id}", response_model=LLMConfigResponse)
 async def get_config(config_id: str, current_user: CurrentUser) -> LLMConfigResponse:
     user_id = current_user["id"]
+    config_uid = _parse_uuid(config_id)
     conn = await _get_conn()
     try:
         row = await conn.fetchrow(
             "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
-            _parse_uuid(config_id),
+            config_uid,
             uuid.UUID(user_id),
         )
         if row is None:
@@ -200,11 +201,12 @@ async def update_config(
     config_id: str, body: LLMConfigUpdate, current_user: CurrentUser
 ) -> LLMConfigResponse:
     user_id = current_user["id"]
+    config_uid = _parse_uuid(config_id)
     conn = await _get_conn()
     try:
         row = await conn.fetchrow(
             "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
-            _parse_uuid(config_id),
+            config_uid,
             uuid.UUID(user_id),
         )
         if row is None:
@@ -233,7 +235,7 @@ async def update_config(
                 await conn.execute(
                     "UPDATE llm_configs SET is_default = false WHERE user_id = $1 AND id != $2",
                     uuid.UUID(user_id),
-                    _parse_uuid(config_id),
+                    config_uid,
                 )
             updated = await conn.fetchrow(
                 """
@@ -252,7 +254,7 @@ async def update_config(
                 context_window,
                 config_enc,
                 config_iv,
-                _parse_uuid(config_id),
+                config_uid,
                 uuid.UUID(user_id),
             )
         return _row_to_response(updated, new_config)  # type: ignore[arg-type]
@@ -263,11 +265,12 @@ async def update_config(
 @router.delete("/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_config(config_id: str, current_user: CurrentUser) -> None:
     user_id = current_user["id"]
+    config_uid = _parse_uuid(config_id)
     conn = await _get_conn()
     try:
         result = await conn.execute(
             "DELETE FROM llm_configs WHERE id = $1 AND user_id = $2",
-            _parse_uuid(config_id),
+            config_uid,
             uuid.UUID(user_id),
         )
         if result == "DELETE 0":
@@ -305,11 +308,12 @@ async def ping_credentials(body: PingRequest, current_user: CurrentUser) -> dict
 async def ping_config(config_id: str, current_user: CurrentUser) -> dict[str, object]:
     """Test an already-saved config by ID."""
     user_id = current_user["id"]
+    config_uid = _parse_uuid(config_id)
     conn = await _get_conn()
     try:
         row = await conn.fetchrow(
             "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
-            _parse_uuid(config_id),
+            config_uid,
             uuid.UUID(user_id),
         )
         if row is None:
