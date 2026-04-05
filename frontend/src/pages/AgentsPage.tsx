@@ -33,6 +33,7 @@ export default function AgentsPage() {
 
   async function handleDelete(e: React.MouseEvent, agentId: string) {
     e.stopPropagation()
+    if (!window.confirm('Delete this agent? This cannot be undone.')) return
     setDeletingId(agentId)
     try {
       const res = await fetch(`${API}/api/agents/${agentId}`, {
@@ -57,7 +58,7 @@ export default function AgentsPage() {
         body: JSON.stringify({ name: 'Untitled Agent' }),
       })
       if (res.ok) {
-        const agent: AgentSummary = await res.json()
+        const agent: { id: string } = await res.json()
         navigate(`/agents/${agent.id}`)
       }
     } finally {

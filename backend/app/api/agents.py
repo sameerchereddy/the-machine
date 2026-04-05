@@ -189,12 +189,27 @@ def _row_to_response(row: asyncpg.Record) -> AgentResponse:
 # ---------------------------------------------------------------------------
 
 
+async def _check_llm_config_owner(
+    conn: asyncpg.Connection, llm_config_uid: uuid.UUID, user_id: str
+) -> None:
+    """Raise 404 if the LLM config doesn't exist or belongs to another user."""
+    row = await conn.fetchrow(
+        "SELECT id FROM llm_configs WHERE id = $1 AND user_id = $2",
+        llm_config_uid,
+        uuid.UUID(user_id),
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="LLM config not found")
+
+
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent(body: AgentCreate, current_user: CurrentUser) -> AgentResponse:
     user_id = current_user["id"]
     llm_config_uid = _parse_uuid(body.llm_config_id) if body.llm_config_id else None
     conn = await _get_conn()
     try:
+        if llm_config_uid:
+            await _check_llm_config_owner(conn, llm_config_uid, user_id)
         row = await conn.fetchrow(
             """
             INSERT INTO agents (user_id, name, llm_config_id)
@@ -271,11 +286,13 @@ async def update_agent(
         def _v(field: str, new: Any) -> Any:
             return new if new is not None else existing[field]
 
-        llm_config_uid = (
-            _parse_uuid(body.llm_config_id)
-            if body.llm_config_id is not None
-            else existing["llm_config_id"]
-        )
+        # Use model_fields_set to distinguish explicit null (clear) from absent (keep)
+        if "llm_config_id" in body.model_fields_set:
+            llm_config_uid = _parse_uuid(body.llm_config_id) if body.llm_config_id else None
+            if llm_config_uid:
+                await _check_llm_config_owner(conn, llm_config_uid, user_id)
+        else:
+            llm_config_uid = existing["llm_config_id"]
 
         row = await conn.fetchrow(
             """

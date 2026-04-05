@@ -121,6 +121,21 @@ class TestCreateAgent:
         assert r.status_code == 201
         assert r.json()["name"] == "Test Agent"
 
+    def test_foreign_llm_config_id_returns_404(self) -> None:
+        """Cannot create agent with another user's llm_config_id."""
+        conn = AsyncMock()
+        # First fetchrow is the ownership check — returns None (not found/not owned)
+        conn.fetchrow.return_value = None
+
+        with _mock_current_user(), patch("app.api.agents._get_conn", return_value=conn):
+            r = client.post(
+                "/api/agents",
+                json={"name": "Bad", "llm_config_id": str(uuid.uuid4())},
+                cookies=_VALID_COOKIE,
+            )
+
+        assert r.status_code == 404
+
     def test_unauthenticated_returns_401(self) -> None:
         r = client.post("/api/agents", json={"name": "x"})
         assert r.status_code == 401
@@ -220,6 +235,41 @@ class TestUpdateAgent:
             )
 
         assert r.status_code == 200
+
+    def test_explicit_null_llm_config_id_clears_it(self) -> None:
+        """Sending llm_config_id: null explicitly should detach the LLM."""
+        existing = _make_agent_row()
+        updated = _make_agent_row()
+        conn = AsyncMock()
+        conn.fetchrow.side_effect = [existing, updated]
+
+        with _mock_current_user(), patch("app.api.agents._get_conn", return_value=conn):
+            r = client.put(
+                f"/api/agents/{_AGENT_ID}",
+                json={"name": "Test Agent", "llm_config_id": None},
+                cookies=_VALID_COOKIE,
+            )
+
+        assert r.status_code == 200
+        # The UPDATE call should have been made with None for llm_config_id
+        call_args = conn.fetchrow.call_args_list[1]
+        assert call_args[0][2] is None  # $2 is llm_config_id in the UPDATE
+
+    def test_foreign_llm_config_id_returns_404(self) -> None:
+        """Cannot update agent with another user's llm_config_id."""
+        existing = _make_agent_row()
+        conn = AsyncMock()
+        # First fetchrow: get existing agent (found), second: ownership check (not found)
+        conn.fetchrow.side_effect = [existing, None]
+
+        with _mock_current_user(), patch("app.api.agents._get_conn", return_value=conn):
+            r = client.put(
+                f"/api/agents/{_AGENT_ID}",
+                json={"name": "x", "llm_config_id": str(uuid.uuid4())},
+                cookies=_VALID_COOKIE,
+            )
+
+        assert r.status_code == 404
 
     def test_not_found_returns_404(self) -> None:
         conn = AsyncMock()

@@ -107,6 +107,16 @@ export default function AgentPage() {
   // Draggable divider
   const [splitPct, setSplitPct] = useState(60)
   const dragging = useRef(false)
+  const dividerMoveRef = useRef<((e: MouseEvent) => void) | null>(null)
+  const dividerUpRef = useRef<(() => void) | null>(null)
+
+  // Clean up divider listeners if component unmounts mid-drag
+  useEffect(() => {
+    return () => {
+      if (dividerMoveRef.current) window.removeEventListener('mousemove', dividerMoveRef.current)
+      if (dividerUpRef.current) window.removeEventListener('mouseup', dividerUpRef.current)
+    }
+  }, [])
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load() }, [id])
@@ -183,7 +193,11 @@ export default function AgentPage() {
       dragging.current = false
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      dividerMoveRef.current = null
+      dividerUpRef.current = null
     }
+    dividerMoveRef.current = onMove
+    dividerUpRef.current = onUp
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
@@ -291,7 +305,7 @@ export default function AgentPage() {
                 value={agent.instructions}
                 onChange={(e) => update({ instructions: e.target.value })}
                 className={`${inputCls} resize-y`}
-                placeholder="You are a helpful assistant���"
+                placeholder="You are a helpful assistant…"
               />
             </Field>
             <Field label="Persona name (optional)">
