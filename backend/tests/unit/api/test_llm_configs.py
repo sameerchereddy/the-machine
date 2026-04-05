@@ -2,6 +2,7 @@
 Unit tests for LLM config endpoints.
 DB (asyncpg) and encryption are mocked — no real network calls.
 """
+
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ _VALID_COOKIE = {"access_token": "valid-tok"}
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _mock_current_user():
     return patch(
@@ -58,13 +60,13 @@ def _make_txn():
 # List
 # ---------------------------------------------------------------------------
 
+
 class TestListConfigs:
     def test_returns_empty_list(self) -> None:
         conn = AsyncMock()
         conn.fetch.return_value = []
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn):
+        with _mock_current_user(), patch("app.api.llm_configs._get_conn", return_value=conn):
             r = client.get("/api/llm-configs", cookies=_VALID_COOKIE)
 
         assert r.status_code == 200
@@ -75,9 +77,11 @@ class TestListConfigs:
         conn = AsyncMock()
         conn.fetch.return_value = [row]
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG),
+        ):
             r = client.get("/api/llm-configs", cookies=_VALID_COOKIE)
 
         assert r.status_code == 200
@@ -95,6 +99,7 @@ class TestListConfigs:
 # Create
 # ---------------------------------------------------------------------------
 
+
 class TestCreateConfig:
     def test_creates_config(self) -> None:
         row = _make_db_row()
@@ -102,9 +107,11 @@ class TestCreateConfig:
         conn.fetchrow.return_value = row
         conn.transaction = MagicMock(return_value=_make_txn())
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.encrypt", return_value=(b"enc", b"iv")):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.encrypt", return_value=(b"enc", b"iv")),
+        ):
             r = client.post(
                 "/api/llm-configs",
                 json={
@@ -124,9 +131,11 @@ class TestCreateConfig:
         conn.fetchrow.return_value = row
         conn.transaction = MagicMock(return_value=_make_txn())
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.encrypt", return_value=(b"enc", b"iv")):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.encrypt", return_value=(b"enc", b"iv")),
+        ):
             r = client.post(
                 "/api/llm-configs",
                 json={
@@ -162,15 +171,18 @@ class TestCreateConfig:
 # Get
 # ---------------------------------------------------------------------------
 
+
 class TestGetConfig:
     def test_returns_config(self) -> None:
         row = _make_db_row()
         conn = AsyncMock()
         conn.fetchrow.return_value = row
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG),
+        ):
             r = client.get(f"/api/llm-configs/{_CONFIG_ID}", cookies=_VALID_COOKIE)
 
         assert r.status_code == 200
@@ -180,8 +192,7 @@ class TestGetConfig:
         conn = AsyncMock()
         conn.fetchrow.return_value = None
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn):
+        with _mock_current_user(), patch("app.api.llm_configs._get_conn", return_value=conn):
             r = client.get(f"/api/llm-configs/{_CONFIG_ID}", cookies=_VALID_COOKIE)
 
         assert r.status_code == 404
@@ -196,6 +207,7 @@ class TestGetConfig:
 # Patch
 # ---------------------------------------------------------------------------
 
+
 class TestUpdateConfig:
     def test_partial_update_name(self) -> None:
         row = _make_db_row()
@@ -204,9 +216,11 @@ class TestUpdateConfig:
         conn.fetchrow.side_effect = [row, updated_row]
         conn.transaction = MagicMock(return_value=_make_txn())
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG),
+        ):
             r = client.patch(
                 f"/api/llm-configs/{_CONFIG_ID}",
                 json={"name": "Renamed"},
@@ -222,9 +236,11 @@ class TestUpdateConfig:
         conn.fetchrow.side_effect = [row, updated_row]
         conn.transaction = MagicMock(return_value=_make_txn())
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG),
+        ):
             r = client.patch(
                 f"/api/llm-configs/{_CONFIG_ID}",
                 json={"is_default": True},
@@ -242,10 +258,12 @@ class TestUpdateConfig:
         conn.fetchrow.side_effect = [row, updated_row]
         conn.transaction = MagicMock(return_value=_make_txn())
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.encrypt", return_value=(b"new-enc", b"new-iv")) as mock_enc, \
-             patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.encrypt", return_value=(b"new-enc", b"new-iv")) as mock_enc,
+            patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG),
+        ):
             r = client.patch(
                 f"/api/llm-configs/{_CONFIG_ID}",
                 json={"config": {"api_key": "sk-new-key-0000000000"}},
@@ -259,8 +277,7 @@ class TestUpdateConfig:
         conn = AsyncMock()
         conn.fetchrow.return_value = None
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn):
+        with _mock_current_user(), patch("app.api.llm_configs._get_conn", return_value=conn):
             r = client.patch(
                 f"/api/llm-configs/{_CONFIG_ID}",
                 json={"name": "x"},
@@ -283,13 +300,13 @@ class TestUpdateConfig:
 # Delete
 # ---------------------------------------------------------------------------
 
+
 class TestDeleteConfig:
     def test_deletes_config(self) -> None:
         conn = AsyncMock()
         conn.execute.return_value = "DELETE 1"
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn):
+        with _mock_current_user(), patch("app.api.llm_configs._get_conn", return_value=conn):
             r = client.delete(f"/api/llm-configs/{_CONFIG_ID}", cookies=_VALID_COOKIE)
 
         assert r.status_code == 204
@@ -298,8 +315,7 @@ class TestDeleteConfig:
         conn = AsyncMock()
         conn.execute.return_value = "DELETE 0"
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn):
+        with _mock_current_user(), patch("app.api.llm_configs._get_conn", return_value=conn):
             r = client.delete(f"/api/llm-configs/{_CONFIG_ID}", cookies=_VALID_COOKIE)
 
         assert r.status_code == 404
@@ -314,10 +330,13 @@ class TestDeleteConfig:
 # Ping (credentials direct — no DB)
 # ---------------------------------------------------------------------------
 
+
 class TestPingCredentials:
     def test_ping_success(self) -> None:
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._ping_provider", new=AsyncMock(return_value=38.0)):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._ping_provider", new=AsyncMock(return_value=38.0)),
+        ):
             r = client.post(
                 "/api/llm-configs/ping",
                 json={"provider": "openai", "model": "gpt-4o", "config": {"api_key": "sk-test"}},
@@ -328,8 +347,13 @@ class TestPingCredentials:
         assert r.json()["latency_ms"] == pytest.approx(38.0)
 
     def test_ping_failure_returns_ok_false(self) -> None:
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._ping_provider", new=AsyncMock(side_effect=Exception("bad key"))):
+        with (
+            _mock_current_user(),
+            patch(
+                "app.api.llm_configs._ping_provider",
+                new=AsyncMock(side_effect=Exception("bad key")),
+            ),
+        ):
             r = client.post(
                 "/api/llm-configs/ping",
                 json={"provider": "openai", "model": "gpt-4o", "config": {"api_key": "bad"}},
@@ -359,16 +383,19 @@ class TestPingCredentials:
 # Ping (saved config by ID)
 # ---------------------------------------------------------------------------
 
+
 class TestPingConfig:
     def test_ping_success(self) -> None:
         row = _make_db_row()
         conn = AsyncMock()
         conn.fetchrow.return_value = row
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG), \
-             patch("app.api.llm_configs._ping_provider", new=AsyncMock(return_value=42.5)):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG),
+            patch("app.api.llm_configs._ping_provider", new=AsyncMock(return_value=42.5)),
+        ):
             r = client.post(f"/api/llm-configs/{_CONFIG_ID}/ping", cookies=_VALID_COOKIE)
 
         assert r.status_code == 200
@@ -381,10 +408,15 @@ class TestPingConfig:
         conn = AsyncMock()
         conn.fetchrow.return_value = row
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn), \
-             patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG), \
-             patch("app.api.llm_configs._ping_provider", new=AsyncMock(side_effect=Exception("bad key"))):
+        with (
+            _mock_current_user(),
+            patch("app.api.llm_configs._get_conn", return_value=conn),
+            patch("app.api.llm_configs.decrypt", return_value=_FAKE_CONFIG),
+            patch(
+                "app.api.llm_configs._ping_provider",
+                new=AsyncMock(side_effect=Exception("bad key")),
+            ),
+        ):
             r = client.post(f"/api/llm-configs/{_CONFIG_ID}/ping", cookies=_VALID_COOKIE)
 
         assert r.status_code == 200
@@ -394,8 +426,7 @@ class TestPingConfig:
         conn = AsyncMock()
         conn.fetchrow.return_value = None
 
-        with _mock_current_user(), \
-             patch("app.api.llm_configs._get_conn", return_value=conn):
+        with _mock_current_user(), patch("app.api.llm_configs._get_conn", return_value=conn):
             r = client.post(f"/api/llm-configs/{_CONFIG_ID}/ping", cookies=_VALID_COOKIE)
 
         assert r.status_code == 404

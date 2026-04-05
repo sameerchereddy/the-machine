@@ -17,7 +17,7 @@ class BedrockProvider(BaseProvider):
     def __init__(self, config: dict[str, Any]) -> None:
         self.model_id = config["model"]
         self.region = config.get("region", "us-east-1")
-        self.aws_access_key = config["api_key"]       # api_key doubles as AWS access key
+        self.aws_access_key = config["api_key"]  # api_key doubles as AWS access key
         self.aws_secret_key = config["aws_secret_key"]
         self._session = aiobotocore.session.get_session()
 
@@ -47,10 +47,12 @@ class BedrockProvider(BaseProvider):
             if msg["role"] == "system":
                 system = msg["content"]
             else:
-                msgs.append({
-                    "role": msg["role"],
-                    "content": [{"text": msg["content"]}],
-                })
+                msgs.append(
+                    {
+                        "role": msg["role"],
+                        "content": [{"text": msg["content"]}],
+                    }
+                )
 
         body: dict[str, Any] = {
             "modelId": self.model_id,
@@ -100,11 +102,13 @@ class BedrockProvider(BaseProvider):
                 content += block["text"]
             elif "toolUse" in block:
                 tu = block["toolUse"]
-                tool_calls.append(ToolCall(
-                    id=tu["toolUseId"],
-                    name=tu["name"],
-                    arguments=tu["input"],
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=tu["toolUseId"],
+                        name=tu["name"],
+                        arguments=tu["input"],
+                    )
+                )
 
         usage = response["usage"]
         return LLMResponse(
@@ -133,7 +137,6 @@ class BedrockProvider(BaseProvider):
         async with self._client() as client:
             response = await client.converse_stream(**body)
             async for event in response["stream"]:
-
                 if "contentBlockDelta" in event:
                     delta = event["contentBlockDelta"]["delta"]
                     if "text" in delta:
@@ -173,7 +176,7 @@ class BedrockProvider(BaseProvider):
                         yield StreamChunk(
                             usage=Usage(
                                 prompt_tokens=usage.get("inputTokens", 0),
-                completion_tokens=usage.get("outputTokens", 0),
+                                completion_tokens=usage.get("outputTokens", 0),
                                 total_tokens=usage.get("totalTokens", 0),
                             )
                         )

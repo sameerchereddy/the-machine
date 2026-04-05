@@ -27,14 +27,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null)
-      setLoading(false)
+    supabase.auth.getSession().then(async ({ data }) => {
+      try {
+        if (data.session) {
+          await syncCookie(data.session.access_token)
+          setUser(data.session.user)
+        }
+      } finally {
+        setLoading(false)
+      }
     })
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      try {
+        if (session) await syncCookie(session.access_token)
+      } catch { /* cookie sync failed — proceed anyway */ }
       setUser(session?.user ?? null)
     })
 

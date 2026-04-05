@@ -1,6 +1,7 @@
 """
 Tests for LLM shared types — mostly sanity checks on defaults.
 """
+
 from app.llm.types import LLMResponse, StreamChunk, ToolCall, Usage
 
 

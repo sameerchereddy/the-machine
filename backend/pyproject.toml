@@ -86,6 +86,11 @@ ignore_errors = true
 module = "app.api.llm_configs"
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+# asyncpg Record subscript typing is untyped; ignore for agent API
+module = "app.api.agents"
+ignore_errors = true
+
 # ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

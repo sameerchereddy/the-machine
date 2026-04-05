@@ -30,9 +30,7 @@ async def run_pending_migrations() -> None:
         rows = await conn.fetch("SELECT version FROM schema_migrations ORDER BY version")
         applied = {row["version"] for row in rows}
 
-        pending = sorted(
-            p for p in _MIGRATIONS_DIR.glob("*.sql") if p.stem not in applied
-        )
+        pending = sorted(p for p in _MIGRATIONS_DIR.glob("*.sql") if p.stem not in applied)
 
         if not pending:
             print("Migrations: all up to date")
@@ -43,9 +41,7 @@ async def run_pending_migrations() -> None:
             print(f"Migrations: applying {version} ...")
             async with conn.transaction():
                 await conn.execute(path.read_text())
-                await conn.execute(
-                    "INSERT INTO schema_migrations (version) VALUES ($1)", version
-                )
+                await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
             print(f"Migrations: ✓ {version}")
 
     finally:

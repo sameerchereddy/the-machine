@@ -2,6 +2,7 @@
 Unit tests for auth endpoints.
 Supabase is fully mocked — no real network calls.
 """
+
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient

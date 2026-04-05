@@ -2,6 +2,7 @@
 Smoke tests for app config — verifies Settings loads from env
 and rejects obviously invalid values.
 """
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +18,7 @@ class TestSettings:
         import importlib
 
         import app.core.config as config_module
+
         importlib.reload(config_module)
 
         s = config_module.Settings()  # type: ignore[call-arg]
@@ -31,6 +33,7 @@ class TestSettings:
         import importlib
 
         import app.core.config as config_module
+
         importlib.reload(config_module)
 
         with pytest.raises((ValidationError, ValueError)):
