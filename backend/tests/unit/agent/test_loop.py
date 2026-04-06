@@ -11,6 +11,7 @@ import pytest
 
 from app.agent.loop import (
     RunTrace,
+    _trim_messages,
     build_system_prompt,
     msg_delta,
     msg_done,
@@ -241,6 +242,64 @@ class TestLoopWithTools:
 
         await run_react_loop(_AGENT, llm_config, adapter, "hi", send, stopped)
         assert calls[0] is None  # tools should be None when not supported
+
+
+# ---------------------------------------------------------------------------
+# _trim_messages
+# ---------------------------------------------------------------------------
+
+
+def _make_exchange(exchange_id: str, content: str) -> list[dict]:
+    """Build one assistant + one tool-result message pair."""
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": exchange_id, "type": "function", "function": {"name": "web_search", "arguments": '{"query": "x"}'}}],
+        },
+        {"role": "tool", "tool_call_id": exchange_id, "content": content},
+    ]
+
+
+class TestTrimMessages:
+    def _base(self) -> list[dict]:
+        return [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "msg"},
+        ]
+
+    def test_no_trim_when_under_limit(self) -> None:
+        messages = self._base() + _make_exchange("e1", "small result")
+        result = _trim_messages(messages)
+        assert result == messages
+
+    def test_trims_oldest_exchange_first(self) -> None:
+        from app.agent.loop import _MAX_HISTORY_CHARS
+
+        big = "x" * (_MAX_HISTORY_CHARS // 2)
+        messages = self._base() + _make_exchange("e1", big) + _make_exchange("e2", big)
+        result = _trim_messages(messages)
+        # e1 (oldest) should be dropped; e2 (newest) should be kept
+        assert not any(m.get("tool_call_id") == "e1" for m in result)
+        assert any(m.get("tool_call_id") == "e2" for m in result)
+
+    def test_always_keeps_system_and_user(self) -> None:
+        from app.agent.loop import _MAX_HISTORY_CHARS
+
+        big = "x" * (_MAX_HISTORY_CHARS + 100)
+        messages = self._base() + _make_exchange("e1", big)
+        result = _trim_messages(messages)
+        assert result[0]["role"] == "system"
+        assert result[1]["role"] == "user"
+
+    def test_preserves_single_exchange_intact(self) -> None:
+        from app.agent.loop import _MAX_HISTORY_CHARS
+
+        big = "x" * (_MAX_HISTORY_CHARS + 100)
+        messages = self._base() + _make_exchange("e1", big)
+        result = _trim_messages(messages)
+        # Single exchange kept intact even though over budget
+        assert len(result) == len(messages)
 
 
 # ---------------------------------------------------------------------------

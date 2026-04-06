@@ -222,6 +222,9 @@ async def run_react_loop(
 
             trace.iterations.append(it)
 
+            # Prune oldest exchanges to keep the context window bounded.
+            messages = _trim_messages(messages)
+
             if tool_calls_used >= max_tool_calls:
                 break  # let the post-loop block handle final response
 
@@ -283,3 +286,52 @@ def _friendly_llm_error(exc: Exception) -> str:
 
 def _split_chunks(text: str, size: int = 25) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+# ---------------------------------------------------------------------------
+# Context window management
+# ---------------------------------------------------------------------------
+
+_MAX_HISTORY_CHARS = 32_000  # ~8k tokens at 4 chars/token — leaves room for the next response
+
+
+def _msg_chars(msg: dict[str, Any]) -> int:
+    """Count the character footprint of a single message, including tool-call arguments."""
+    total = len(str(msg.get("content") or ""))
+    for tc in msg.get("tool_calls") or []:
+        total += len(str(tc.get("function", {}).get("arguments") or ""))
+    return total
+
+
+def _trim_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Drop the oldest complete tool-call exchanges from *messages* until total
+    character count is within _MAX_HISTORY_CHARS.
+
+    - messages[0] (system) and messages[1] (user) are always preserved.
+    - Exchanges are dropped atomically — an assistant message and all its paired
+      tool-result messages are removed together so the conversation stays valid
+      for the API (tool results must have a matching assistant tool_call entry).
+    - If only one exchange remains and the history is still over budget, it is
+      kept intact rather than partially stripped.
+    """
+    if sum(_msg_chars(m) for m in messages) <= _MAX_HISTORY_CHARS:
+        return messages
+
+    pinned = messages[:2]
+    history = list(messages[2:])
+
+    while history:
+        if sum(_msg_chars(m) for m in pinned) + sum(_msg_chars(m) for m in history) <= _MAX_HISTORY_CHARS:
+            break
+        # Find where the *second* exchange begins (next assistant message after index 0)
+        # so we can atomically drop the first complete exchange.
+        next_boundary = next(
+            (i for i in range(1, len(history)) if history[i].get("role") == "assistant"),
+            None,
+        )
+        if next_boundary is None:
+            break  # Only one exchange remains; preserve it intact.
+        history = history[next_boundary:]
+
+    return pinned + history
