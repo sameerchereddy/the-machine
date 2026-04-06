@@ -7,7 +7,7 @@ Tool credentials (if any) are AES-256-GCM encrypted.
 
 import json as _json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, status
@@ -152,7 +152,7 @@ def _parse_jsonb_list(val: Any) -> list[Any]:
         return []
     if isinstance(val, list):
         return val
-    return _json.loads(val)
+    return cast(list[Any], _json.loads(val))
 
 
 def _to_jsonb(val: Any) -> str | None:
@@ -240,7 +240,7 @@ async def create_agent(body: AgentCreate, current_user: CurrentUser) -> AgentRes
             body.name,
             llm_config_uid,
         )
-        return _row_to_response(row)  # type: ignore[arg-type]
+        return _row_to_response(row)
     finally:
         await conn.close()
 
@@ -369,7 +369,7 @@ async def update_agent(
             agent_uid,
             uuid.UUID(user_id),
         )
-        return _row_to_response(row)  # type: ignore[arg-type]
+        return _row_to_response(row)
     finally:
         await conn.close()
 
@@ -538,7 +538,7 @@ async def add_tool(agent_id: str, body: ToolCreate, current_user: CurrentUser) -
             body.endpoint_url,
             body.sort_order,
         )
-        return _tool_row_to_response(row)  # type: ignore[arg-type]
+        return _tool_row_to_response(row)
     finally:
         await conn.close()
 
@@ -597,7 +597,7 @@ async def update_tool(
             tool_uid,
             agent_uid,
         )
-        return _tool_row_to_response(row)  # type: ignore[arg-type]
+        return _tool_row_to_response(row)
     finally:
         await conn.close()
 

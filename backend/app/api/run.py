@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/agents", tags=["run"])
 
 
 async def _get_conn() -> asyncpg.Connection:
-    return await asyncpg.connect(settings.database_url)  # type: ignore[union-attr]
+    return await asyncpg.connect(settings.database_url)
 
 
 @router.websocket("/{agent_id}/run")
