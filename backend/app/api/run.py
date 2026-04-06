@@ -17,7 +17,9 @@ Server → Client (JSON):
 
 import asyncio
 import json as _json
+import logging
 import uuid
+from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -27,6 +29,8 @@ from app.core.config import settings
 from app.core.encryption import decrypt
 from app.core.security import verify_token
 from app.llm.adapter import build_adapter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agents", tags=["run"])
 
@@ -63,62 +67,58 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
         await websocket.close()
         return
 
-    # ── Load agent + LLM config ──────────────────────────────────────────────
+    # ── Load agent + LLM config (one connection for the whole session) ──────────
+    db_conn: asyncpg.Connection | None = None
     try:
-        conn = await _get_conn()
-        try:
-            agent_row = await conn.fetchrow(
-                "SELECT * FROM agents WHERE id = $1 AND user_id = $2",
-                agent_uid,
-                uuid.UUID(user_id),
+        db_conn = await _get_conn()
+        agent_row = await db_conn.fetchrow(
+            "SELECT * FROM agents WHERE id = $1 AND user_id = $2",
+            agent_uid,
+            uuid.UUID(user_id),
+        )
+        if agent_row is None:
+            await websocket.send_json({"type": "error", "message": "Agent not found"})
+            await websocket.close()
+            return
+
+        agent: dict[str, Any] = dict(agent_row)
+        # asyncpg returns JSONB columns as raw strings — parse them
+        for _f in ("context_entries", "memory_types", "topic_restrictions"):
+            v = agent.get(_f)
+            if isinstance(v, str):
+                try:
+                    agent[_f] = _json.loads(v)
+                except Exception:
+                    agent[_f] = []
+
+        if not agent.get("llm_config_id"):
+            await websocket.send_json(
+                {"type": "error", "message": "No LLM configured for this agent. Go to the builder and select one."}
             )
-            if agent_row is None:
-                await websocket.send_json({"type": "error", "message": "Agent not found"})
-                await websocket.close()
-                return
+            await websocket.close()
+            return
 
-            agent = dict(agent_row)
-            # asyncpg returns JSONB columns as raw strings — parse them
-            for _f in ("context_entries", "memory_types", "topic_restrictions"):
-                v = agent.get(_f)
-                if isinstance(v, str):
-                    try:
-                        agent[_f] = _json.loads(v)
-                    except Exception:
-                        agent[_f] = []
+        llm_row = await db_conn.fetchrow(
+            "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
+            agent["llm_config_id"],
+            uuid.UUID(user_id),
+        )
+        if llm_row is None:
+            await websocket.send_json({"type": "error", "message": "LLM config not found"})
+            await websocket.close()
+            return
 
-            if not agent.get("llm_config_id"):
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": "No LLM configured for this agent. Go to the builder and select one.",
-                    }
-                )
-                await websocket.close()
-                return
-
-            llm_row = await conn.fetchrow(
-                "SELECT * FROM llm_configs WHERE id = $1 AND user_id = $2",
-                agent["llm_config_id"],
-                uuid.UUID(user_id),
-            )
-            if llm_row is None:
-                await websocket.send_json({"type": "error", "message": "LLM config not found"})
-                await websocket.close()
-                return
-
-            llm_config = dict(llm_row)
-        finally:
-            await conn.close()
-    except Exception as exc:
-        await websocket.send_json({"type": "error", "message": f"Database error: {exc}"})
+        llm_config: dict[str, Any] = dict(llm_row)
+    except Exception:
+        logger.exception("DB error during WS session setup")
+        await websocket.send_json({"type": "error", "message": "Failed to load agent configuration."})
         await websocket.close()
         return
 
     # ── Decrypt credentials ──────────────────────────────────────────────────
     try:
         config_id = str(llm_config["id"])
-        decrypted = decrypt(
+        decrypted: dict[str, Any] = decrypt(
             bytes(llm_config["config_enc"]),
             bytes(llm_config["config_iv"]),
             user_id,
@@ -127,15 +127,16 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
         decrypted["provider"] = llm_config["provider"]
         decrypted["model"] = str(llm_config["model"])
         decrypted["supports_tool_calls"] = bool(llm_config["supports_tool_calls"])
-    except Exception as exc:
-        await websocket.send_json({"type": "error", "message": f"Credential error: {exc}"})
+    except Exception:
+        logger.exception("Credential decrypt error during WS session setup")
+        await websocket.send_json({"type": "error", "message": "Failed to decrypt LLM credentials."})
         await websocket.close()
         return
 
     adapter = build_adapter(decrypted)
     stopped_event = asyncio.Event()
 
-    async def send(msg: dict) -> None:  # type: ignore[type-arg]
+    async def send(msg: dict[str, Any]) -> None:
         try:
             await websocket.send_json(msg)
         except Exception:
@@ -171,12 +172,11 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
                 stopped_event=stopped_event,
             )
 
-            # ── Persist trace ────────────────────────────────────────────────
+            # ── Persist trace (reuse session connection) ─────────────────────
             trace_id = str(uuid.uuid4())
             try:
-                conn2 = await _get_conn()
-                try:
-                    await conn2.execute(
+                if db_conn and not db_conn.is_closed():
+                    await db_conn.execute(
                         """
                         INSERT INTO agent_traces
                             (id, agent_id, user_id, llm_config_id, user_message, trace_json)
@@ -189,18 +189,21 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
                         user_message,
                         _json.dumps(trace.to_json()),
                     )
-                finally:
-                    await conn2.close()
             except Exception:
-                pass  # Trace save failure must not fail the run
+                logger.exception("Failed to persist trace %s", trace_id)
+                # Trace save failure must not fail the run
 
             if not trace.error:
                 await send(msg_done(trace_id, trace.usage))
 
     except WebSocketDisconnect:
         pass
-    except Exception as exc:
+    except Exception:
         import contextlib
 
+        logger.exception("Unhandled error in WS run loop")
         with contextlib.suppress(Exception):
-            await websocket.send_json(msg_error(str(exc)))
+            await websocket.send_json(msg_error("An unexpected error occurred."))
+    finally:
+        if db_conn and not db_conn.is_closed():
+            await db_conn.close()

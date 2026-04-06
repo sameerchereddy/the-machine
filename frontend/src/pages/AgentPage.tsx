@@ -211,8 +211,7 @@ export default function AgentPage() {
   }
 
   const handleLaunch = useCallback(() => {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/agents/${id}/run`)
+    const ws = new WebSocket(`${API.replace(/^http/, 'ws')}/api/agents/${id}/run`)
 
     ws.onopen = () => setLaunched(true)
 

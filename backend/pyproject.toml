@@ -87,19 +87,19 @@ module = "app.api.llm_configs"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-# asyncpg Record subscript typing is untyped; ignore for agent API
+# asyncpg Record is untyped — subscript access produces Any
 module = "app.api.agents"
-ignore_errors = true
+disable_error_code = ["index", "union-attr", "arg-type", "return-value"]
 
 [[tool.mypy.overrides]]
-# asyncpg + WebSocket typing; ignore for run endpoint
+# asyncpg Connection + WebSocket generics are untyped
 module = "app.api.run"
-ignore_errors = true
+disable_error_code = ["union-attr", "arg-type", "assignment"]
 
 [[tool.mypy.overrides]]
-# agent loop uses asyncpg records indirectly
+# agent loop: asyncio.gather return type is heterogeneous tuple
 module = "app.agent.loop"
-ignore_errors = true
+disable_error_code = ["misc", "arg-type"]
 
 # ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]

@@ -4,10 +4,13 @@ Each tool is a pure async function returning a plain string result.
 """
 
 import ast
+import ipaddress
 import math
 import re
+import socket
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -156,7 +159,27 @@ async def tool_current_datetime() -> str:
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TheMachineBot/1.0)"}
 
 
+def _is_safe_url(url: str) -> bool:
+    """Reject non-https URLs and private/loopback IP ranges to prevent SSRF."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme != "https":
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        resolved = socket.gethostbyname(hostname)
+        addr = ipaddress.ip_address(resolved)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return False
+    except Exception:
+        return False
+    return True
+
+
 async def tool_url_reader(url: str) -> str:
+    if not _is_safe_url(url):
+        return "Error: URL not allowed. Only public https:// URLs are supported."
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
             resp = await client.get(url, headers=_HEADERS)
@@ -179,7 +202,7 @@ async def tool_url_reader(url: str) -> str:
 async def tool_wikipedia_search(query: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            slug = query.strip().replace(" ", "_")
+            slug = quote(query.strip().replace(" ", "_"), safe="_")
             resp = await client.get(
                 f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}",
                 headers=_HEADERS,

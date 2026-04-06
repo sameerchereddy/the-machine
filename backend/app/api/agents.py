@@ -160,7 +160,8 @@ def _to_jsonb(val: Any) -> str | None:
     if val is None:
         return None
     if isinstance(val, str):
-        return val  # already serialized
+        _json.loads(val)  # validate — raises ValueError if not valid JSON
+        return val
     return _json.dumps(val)
 
 
