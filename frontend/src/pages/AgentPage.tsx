@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 const API = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -40,6 +40,21 @@ type Agent = {
 }
 
 type LLMConfig = { id: string; name: string; provider: string; model: string }
+
+type ToolActivity = {
+  id: string
+  name: string
+  input: Record<string, unknown>
+  result?: string
+}
+
+type ChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  tools: ToolActivity[]
+  traceId?: string
+  streaming?: boolean
+}
 
 // ---------------------------------------------------------------------------
 // Block component
@@ -103,6 +118,14 @@ export default function AgentPage() {
   const [saved, setSaved] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState('')
+
+  // Chat state
+  const [launched, setLaunched] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [chatInput, setChatInput] = useState('')
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const wsRef = useRef<WebSocket | null>(null)
+  const chatScrollRef = useRef<HTMLDivElement | null>(null)
 
   // Draggable divider
   const [splitPct, setSplitPct] = useState(60)
@@ -181,7 +204,111 @@ export default function AgentPage() {
     }
   }
 
-  // Divider drag
+  // ── Chat ──────────────────────────────────────────────────────────────────
+
+  function scrollToBottom() {
+    chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' })
+  }
+
+  const handleLaunch = useCallback(() => {
+    const ws = new WebSocket(`${API.replace(/^http/, 'ws')}/api/agents/${id}/run`)
+
+    ws.onopen = () => setLaunched(true)
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data as string) as Record<string, unknown>
+
+      if (msg.type === 'iteration') {
+        // New turn starting — no UI update needed
+      } else if (msg.type === 'tool_start') {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.role === 'assistant' && last.streaming) {
+            const updated = { ...last, tools: [...last.tools, { id: msg.tool_id as string, name: msg.tool_name as string, input: msg.input as Record<string, unknown> }] }
+            return [...prev.slice(0, -1), updated]
+          }
+          return [...prev, { role: 'assistant', content: '', tools: [{ id: msg.tool_id as string, name: msg.tool_name as string, input: msg.input as Record<string, unknown> }], streaming: true }]
+        })
+        scrollToBottom()
+      } else if (msg.type === 'tool_end') {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.role === 'assistant') {
+            const tools = last.tools.map((t) =>
+              t.id === msg.tool_id ? { ...t, result: msg.result as string } : t,
+            )
+            return [...prev.slice(0, -1), { ...last, tools }]
+          }
+          return prev
+        })
+      } else if (msg.type === 'delta') {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.role === 'assistant' && last.streaming) {
+            return [...prev.slice(0, -1), { ...last, content: last.content + (msg.content as string) }]
+          }
+          return [...prev, { role: 'assistant', content: msg.content as string, tools: [], streaming: true }]
+        })
+        scrollToBottom()
+      } else if (msg.type === 'done') {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.role === 'assistant') {
+            return [...prev.slice(0, -1), { ...last, streaming: false, traceId: msg.trace_id as string }]
+          }
+          return prev
+        })
+        setRunning(false)
+      } else if (msg.type === 'stopped') {
+        setRunning(false)
+      } else if (msg.type === 'error') {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: `Error: ${msg.message as string}`, tools: [], streaming: false },
+        ])
+        setRunning(false)
+      }
+    }
+
+    ws.onerror = () => {
+      setRunning(false)
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'Error: WebSocket connection failed.', tools: [], streaming: false },
+      ])
+    }
+
+    ws.onclose = () => {
+      setLaunched(false)
+      setRunning(false)
+      setMessages([])
+      wsRef.current = null
+    }
+
+    wsRef.current = ws
+  }, [id])
+
+  function handleSend() {
+    if (!chatInput.trim() || !wsRef.current || running) return
+    const content = chatInput.trim()
+    setMessages((prev) => [...prev, { role: 'user', content, tools: [] }])
+    setChatInput('')
+    setRunning(true)
+    wsRef.current.send(JSON.stringify({ type: 'message', content }))
+    scrollToBottom()
+  }
+
+  function handleStop() {
+    wsRef.current?.send(JSON.stringify({ type: 'stop' }))
+    // running stays true until the server sends "stopped" or "error"
+  }
+
+  function handleDisconnect() {
+    wsRef.current?.close()
+    // messages are cleared in ws.onclose to avoid clearing while user is still reading
+  }
+
+  // ── Divider drag
   function onDividerMouseDown() {
     dragging.current = true
     function onMove(e: MouseEvent) {
@@ -378,7 +505,7 @@ export default function AgentPage() {
                       entries[i] = { ...entries[i], key: e.target.value }
                       update({ context_entries: entries })
                     }}
-                    className={`${inputCls} w-1/3`}
+                    className={`${inputCls} w-28 shrink-0`}
                     placeholder="key"
                   />
                   <input
@@ -557,23 +684,126 @@ export default function AgentPage() {
 
       {/* ── Chat panel ──────────────────────────────────────────── */}
       <div className="flex flex-col flex-1 overflow-hidden">
+
+        {/* Chat toolbar */}
         <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0">
-          <span className="text-xs text-muted-foreground">Chat console</span>
-        </div>
-        <div className="flex flex-1 items-center justify-center text-center px-8">
-          <div className="space-y-3 max-w-xs">
-            <p className="text-sm text-muted-foreground">
-              Configure your agent in the builder, then launch a session here.
-            </p>
-            <button
-              disabled
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground opacity-40 cursor-not-allowed"
-            >
-              ▶ Launch agent
-            </button>
-            <p className="text-xs text-muted-foreground">Coming in a future cycle</p>
+          <span className="text-xs text-muted-foreground">
+            {launched ? 'Chat console' : 'Chat console — not started'}
+          </span>
+          <div className="flex items-center gap-3">
+            {launched && running && (
+              <button onClick={handleStop} className="text-xs text-destructive hover:opacity-80">
+                ■ Stop
+              </button>
+            )}
+            {launched && (
+              <button
+                onClick={handleDisconnect}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Disconnect
+              </button>
+            )}
           </div>
         </div>
+
+        {!launched ? (
+          /* Launch state */
+          <div className="flex flex-1 items-center justify-center text-center px-8">
+            <div className="space-y-3 max-w-xs">
+              <p className="text-sm text-muted-foreground">
+                {agent.llm_config_id
+                  ? 'Agent configured. Ready to launch.'
+                  : 'Select an LLM in the builder before launching.'}
+              </p>
+              <button
+                onClick={handleLaunch}
+                disabled={!agent.llm_config_id}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ▶ Launch agent
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Message list */}
+            <div
+              ref={chatScrollRef}
+              className="flex-1 overflow-y-auto px-4 py-4 space-y-4 select-text"
+            >
+              {messages.length === 0 && (
+                <p className="text-xs text-muted-foreground text-center pt-8">
+                  Session started. Send a message to begin.
+                </p>
+              )}
+              {messages.map((msg, i) => (
+                <div key={i} className={msg.role === 'user' ? 'flex justify-end' : ''}>
+                  {msg.role === 'user' ? (
+                    <span className="inline-block bg-secondary px-3 py-1.5 rounded-md text-sm max-w-[80%]">
+                      {msg.content}
+                    </span>
+                  ) : (
+                    <div className="space-y-1.5 max-w-[90%]">
+                      {/* Tool activity */}
+                      {msg.tools.map((t) => (
+                        <div key={t.id} className="text-xs font-mono text-muted-foreground">
+                          <span className="text-primary">[{t.name}]</span>
+                          {t.result !== undefined
+                            ? ` → ${t.result.slice(0, 100)}${t.result.length > 100 ? '…' : ''}`
+                            : ' running…'}
+                        </div>
+                      ))}
+                      {/* Response text */}
+                      {(msg.content || msg.streaming) && (
+                        <p className="text-sm whitespace-pre-wrap">
+                          {msg.content}
+                          {msg.streaming && <span className="animate-pulse">▋</span>}
+                        </p>
+                      )}
+                      {/* Trace link */}
+                      {msg.traceId && (
+                        <button
+                          onClick={() => navigate(`/traces/${msg.traceId}`)}
+                          className="text-xs text-muted-foreground hover:text-foreground underline"
+                        >
+                          [trace]
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Input area */}
+            <div className="border-t border-border px-4 py-3 shrink-0">
+              <div className="flex gap-2">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      handleSend()
+                    }
+                  }}
+                  placeholder="Type a message…"
+                  disabled={running}
+                  className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                />
+                <button
+                  onClick={running ? handleStop : handleSend}
+                  disabled={!running && !chatInput.trim()}
+                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
+                >
+                  {running ? '■' : 'Send'}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
       </div>
 
     </div>

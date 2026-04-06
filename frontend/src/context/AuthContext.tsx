@@ -28,14 +28,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
-      try {
-        if (data.session) {
+      if (data.session) {
+        try {
           await syncCookie(data.session.access_token)
-          setUser(data.session.user)
+        } catch {
+          // syncCookie failed — proceed anyway
         }
-      } finally {
-        setLoading(false)
+        setUser(data.session.user)
       }
+      setLoading(false)
     })
 
     const {

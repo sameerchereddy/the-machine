@@ -5,8 +5,9 @@ All routes are protected — requires valid session cookie.
 Tool credentials (if any) are AES-256-GCM encrypted.
 """
 
+import json as _json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, status
@@ -145,6 +146,25 @@ class AgentSummary(BaseModel):
     updated_at: str
 
 
+def _parse_jsonb_list(val: Any) -> list[Any]:
+    """Handle JSONB columns that asyncpg may return as a Python list or a JSON string."""
+    if not val:
+        return []
+    if isinstance(val, list):
+        return val
+    return cast(list[Any], _json.loads(val))
+
+
+def _to_jsonb(val: Any) -> str | None:
+    """Serialize a Python value to a JSON string for asyncpg JSONB parameters."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        _json.loads(val)  # validate — raises ValueError if not valid JSON
+        return val
+    return _json.dumps(val)
+
+
 def _row_to_response(row: asyncpg.Record) -> AgentResponse:
     return AgentResponse(
         id=str(row["id"]),
@@ -157,14 +177,14 @@ def _row_to_response(row: asyncpg.Record) -> AgentResponse:
         output_schema=row["output_schema"],
         response_language=row["response_language"],
         show_reasoning=row["show_reasoning"],
-        context_entries=list(row["context_entries"]) if row["context_entries"] else [],
+        context_entries=_parse_jsonb_list(row["context_entries"]),
         auto_inject_datetime=row["auto_inject_datetime"],
         auto_inject_user_profile=row["auto_inject_user_profile"],
         context_render_as=row["context_render_as"],
         history_window=row["history_window"],
         summarise_old_messages=row["summarise_old_messages"],
         long_term_enabled=row["long_term_enabled"],
-        memory_types=list(row["memory_types"]) if row["memory_types"] else [],
+        memory_types=_parse_jsonb_list(row["memory_types"]),
         max_memories=row["max_memories"],
         retention_days=row["retention_days"],
         kb_top_k=row["kb_top_k"],
@@ -177,7 +197,7 @@ def _row_to_response(row: asyncpg.Record) -> AgentResponse:
         on_max_iterations=row["on_max_iterations"],
         max_tool_calls_per_run=row["max_tool_calls_per_run"],
         max_tokens_per_run=row["max_tokens_per_run"],
-        topic_restrictions=list(row["topic_restrictions"]) if row["topic_restrictions"] else [],
+        topic_restrictions=_parse_jsonb_list(row["topic_restrictions"]),
         allow_clarifying_questions=row["allow_clarifying_questions"],
         pii_detection=row["pii_detection"],
         safe_tool_mode=row["safe_tool_mode"],
@@ -220,7 +240,7 @@ async def create_agent(body: AgentCreate, current_user: CurrentUser) -> AgentRes
             body.name,
             llm_config_uid,
         )
-        return _row_to_response(row)  # type: ignore[arg-type]
+        return _row_to_response(row)
     finally:
         await conn.close()
 
@@ -319,19 +339,17 @@ async def update_agent(
             _v("persona_name", body.persona_name),
             _v("response_style", body.response_style),
             _v("output_format", body.output_format),
-            body.output_schema if body.output_schema is not None else existing["output_schema"],
+            _to_jsonb(body.output_schema if body.output_schema is not None else existing["output_schema"]),
             _v("response_language", body.response_language),
             _v("show_reasoning", body.show_reasoning),
-            body.context_entries
-            if body.context_entries is not None
-            else existing["context_entries"],
+            _to_jsonb(body.context_entries if body.context_entries is not None else _parse_jsonb_list(existing["context_entries"])),
             _v("auto_inject_datetime", body.auto_inject_datetime),
             _v("auto_inject_user_profile", body.auto_inject_user_profile),
             _v("context_render_as", body.context_render_as),
             _v("history_window", body.history_window),
             _v("summarise_old_messages", body.summarise_old_messages),
             _v("long_term_enabled", body.long_term_enabled),
-            body.memory_types if body.memory_types is not None else existing["memory_types"],
+            _to_jsonb(body.memory_types if body.memory_types is not None else _parse_jsonb_list(existing["memory_types"])),
             _v("max_memories", body.max_memories),
             _v("retention_days", body.retention_days),
             _v("kb_top_k", body.kb_top_k),
@@ -344,16 +362,14 @@ async def update_agent(
             _v("on_max_iterations", body.on_max_iterations),
             _v("max_tool_calls_per_run", body.max_tool_calls_per_run),
             _v("max_tokens_per_run", body.max_tokens_per_run),
-            body.topic_restrictions
-            if body.topic_restrictions is not None
-            else existing["topic_restrictions"],
+            _to_jsonb(body.topic_restrictions if body.topic_restrictions is not None else _parse_jsonb_list(existing["topic_restrictions"])),
             _v("allow_clarifying_questions", body.allow_clarifying_questions),
             _v("pii_detection", body.pii_detection),
             _v("safe_tool_mode", body.safe_tool_mode),
             agent_uid,
             uuid.UUID(user_id),
         )
-        return _row_to_response(row)  # type: ignore[arg-type]
+        return _row_to_response(row)
     finally:
         await conn.close()
 
@@ -522,7 +538,7 @@ async def add_tool(agent_id: str, body: ToolCreate, current_user: CurrentUser) -
             body.endpoint_url,
             body.sort_order,
         )
-        return _tool_row_to_response(row)  # type: ignore[arg-type]
+        return _tool_row_to_response(row)
     finally:
         await conn.close()
 
@@ -581,7 +597,7 @@ async def update_tool(
             tool_uid,
             agent_uid,
         )
-        return _tool_row_to_response(row)  # type: ignore[arg-type]
+        return _tool_row_to_response(row)
     finally:
         await conn.close()
 
