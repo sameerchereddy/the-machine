@@ -259,6 +259,8 @@ export default function AgentPage() {
           return prev
         })
         setRunning(false)
+      } else if (msg.type === 'stopped') {
+        setRunning(false)
       } else if (msg.type === 'error') {
         setMessages((prev) => [
           ...prev,
@@ -268,9 +270,18 @@ export default function AgentPage() {
       }
     }
 
+    ws.onerror = () => {
+      setRunning(false)
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'Error: WebSocket connection failed.', tools: [], streaming: false },
+      ])
+    }
+
     ws.onclose = () => {
       setLaunched(false)
       setRunning(false)
+      setMessages([])
       wsRef.current = null
     }
 
@@ -289,13 +300,12 @@ export default function AgentPage() {
 
   function handleStop() {
     wsRef.current?.send(JSON.stringify({ type: 'stop' }))
-    setRunning(false)
+    // running stays true until the server sends "stopped" or "error"
   }
 
   function handleDisconnect() {
     wsRef.current?.close()
-    setLaunched(false)
-    setMessages([])
+    // messages are cleared in ws.onclose to avoid clearing while user is still reading
   }
 
   // ── Divider drag

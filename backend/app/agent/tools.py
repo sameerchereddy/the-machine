@@ -4,6 +4,7 @@ Each tool is a pure async function returning a plain string result.
 """
 
 import ast
+import asyncio
 import ipaddress
 import math
 import re
@@ -157,31 +158,74 @@ async def tool_current_datetime() -> str:
 # ---------------------------------------------------------------------------
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TheMachineBot/1.0)"}
+_TOOL_RESULT_LIMIT = 4000
 
 
-def _is_safe_url(url: str) -> bool:
-    """Reject non-https URLs and private/loopback IP ranges to prevent SSRF."""
+async def _resolve_safe(hostname: str) -> tuple[str | None, str]:
+    """
+    Resolve *hostname* asynchronously and validate it is not private/reserved.
+
+    Returns (resolved_ip, "") on success or (None, reason) on failure.
+    DNS resolution failures and deliberate SSRF blocks return distinct reason
+    strings to aid debugging.
+    """
+    loop = asyncio.get_running_loop()
     try:
-        parsed = urlparse(url)
-        if parsed.scheme != "https":
-            return False
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-        resolved = socket.gethostbyname(hostname)
+        resolved = await loop.run_in_executor(None, socket.gethostbyname, hostname)
+    except OSError:
+        return None, "DNS resolution failed for hostname"
+    try:
         addr = ipaddress.ip_address(resolved)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-            return False
-    except Exception:
-        return False
-    return True
+    except ValueError:
+        return None, "DNS resolution failed for hostname"
+    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        return None, "URL resolves to a private or reserved IP address"
+    return resolved, ""
+
+
+class _PinnedTransport(httpx.AsyncHTTPTransport):
+    """
+    Connect to *resolved_ip* (pre-validated) but use the original hostname for
+    TLS SNI and certificate verification.  This prevents DNS rebinding: DNS is
+    resolved once at validation time and the address is locked in for the actual
+    HTTP connection so a second DNS lookup cannot redirect to a private IP.
+    """
+
+    def __init__(self, resolved_ip: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._resolved_ip = resolved_ip
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        original_host = request.url.host
+        pinned_url = request.url.copy_with(host=self._resolved_ip)
+        # sni_hostname tells httpcore to use the original hostname for TLS SNI
+        # and certificate verification even though we connect to the IP.
+        extensions = {**request.extensions, "sni_hostname": original_host.encode("ascii")}
+        pinned = httpx.Request(
+            request.method,
+            pinned_url,
+            headers=request.headers,
+            stream=request.stream,
+            extensions=extensions,
+        )
+        return await super().handle_async_request(pinned)
 
 
 async def tool_url_reader(url: str) -> str:
-    if not _is_safe_url(url):
-        return "Error: URL not allowed. Only public https:// URLs are supported."
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            return "Error: URL not allowed. Only public https:// URLs are supported."
+    except Exception:
+        return "Error: URL not allowed. Only public https:// URLs are supported."
+
+    resolved_ip, reason = await _resolve_safe(parsed.hostname)
+    if resolved_ip is None:
+        return f"Error: URL not allowed — {reason}."
+
+    try:
+        transport = _PinnedTransport(resolved_ip)
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True, timeout=15) as client:
             resp = await client.get(url, headers=_HEADERS)
             resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -189,7 +233,7 @@ async def tool_url_reader(url: str) -> str:
             tag.decompose()
         text = soup.get_text(separator=" ")
         text = re.sub(r"\s+", " ", text).strip()
-        return text[:4000]
+        return text[:_TOOL_RESULT_LIMIT]
     except Exception as exc:
         return f"Error fetching URL: {exc}"
 
@@ -214,7 +258,7 @@ async def tool_wikipedia_search(query: str) -> str:
                     title = data.get("title", query)
                     url = data.get("content_urls", {}).get("desktop", {}).get("page", "")
                     suffix = f"\nSource: {url}" if url else ""
-                    return f"{title}: {extract}{suffix}"
+                    return f"{title}: {extract}{suffix}"[:_TOOL_RESULT_LIMIT]
 
             # Fall back to search API
             search_resp = await client.get(
@@ -233,7 +277,7 @@ async def tool_wikipedia_search(query: str) -> str:
                 return "No Wikipedia article found."
 
             title = results[0]["title"]
-            slug2 = title.replace(" ", "_")
+            slug2 = quote(title.replace(" ", "_"), safe="_")
             summary_resp = await client.get(
                 f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug2}",
                 headers=_HEADERS,
@@ -243,7 +287,7 @@ async def tool_wikipedia_search(query: str) -> str:
                 extract2 = data2.get("extract", "No summary available.")
                 url2 = data2.get("content_urls", {}).get("desktop", {}).get("page", "")
                 suffix2 = f"\nSource: {url2}" if url2 else ""
-                return f"{title}: {extract2}{suffix2}"
+                return f"{title}: {extract2}{suffix2}"[:_TOOL_RESULT_LIMIT]
             return f"Found article '{title}' but could not retrieve summary."
     except Exception as exc:
         return f"Error: {exc}"
@@ -262,6 +306,7 @@ async def tool_web_search(query: str) -> str:
                 params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
                 headers=_HEADERS,
             )
+            resp.raise_for_status()
             data = resp.json()
 
         parts: list[str] = []
@@ -274,7 +319,8 @@ async def tool_web_search(query: str) -> str:
             if isinstance(topic, dict) and topic.get("Text"):
                 parts.append(topic["Text"])
 
-        return "\n\n".join(parts) if parts else "No results found. Try a more specific query."
+        result = "\n\n".join(parts) if parts else "No results found. Try a more specific query."
+        return result[:_TOOL_RESULT_LIMIT]
     except Exception as exc:
         return f"Error: {exc}"
 
@@ -283,18 +329,30 @@ async def tool_web_search(query: str) -> str:
 # Dispatcher
 # ---------------------------------------------------------------------------
 
+_REQUIRED_ARGS: dict[str, list[str]] = {
+    "calculator": ["expression"],
+    "url_reader": ["url"],
+    "wikipedia_search": ["query"],
+    "web_search": ["query"],
+}
+
 
 async def run_tool(name: str, arguments: dict[str, Any]) -> str:
     """Route a tool call to the correct implementation."""
+    required = _REQUIRED_ARGS.get(name, [])
+    missing = [arg for arg in required if not arguments.get(arg)]
+    if missing:
+        return f"Error: missing required argument(s): {', '.join(missing)}"
+
     if name == "calculator":
-        return await tool_calculator(arguments.get("expression", ""))
+        return await tool_calculator(arguments["expression"])
     elif name == "current_datetime":
         return await tool_current_datetime()
     elif name == "url_reader":
-        return await tool_url_reader(arguments.get("url", ""))
+        return await tool_url_reader(arguments["url"])
     elif name == "wikipedia_search":
-        return await tool_wikipedia_search(arguments.get("query", ""))
+        return await tool_wikipedia_search(arguments["query"])
     elif name == "web_search":
-        return await tool_web_search(arguments.get("query", ""))
+        return await tool_web_search(arguments["query"])
     else:
         return f"Unknown tool: {name!r}"

@@ -46,6 +46,11 @@ class TestSafeEval:
         with pytest.raises((ValueError, SyntaxError)):
             _safe_eval("[x for x in range(10)]")
 
+    def test_disallows_attribute_access(self) -> None:
+        # ast.Attribute nodes are not in _SAFE_NODES; e.g. sqrt(4).__class__ must be blocked
+        with pytest.raises(ValueError, match="Disallowed"):
+            _safe_eval("sqrt(4).__class__")
+
 
 class TestToolCalculator:
     @pytest.mark.asyncio
@@ -98,3 +103,8 @@ class TestRunTool:
     async def test_unknown_tool_returns_error(self) -> None:
         result = await run_tool("nonexistent_tool", {})
         assert "Unknown tool" in result
+
+    @pytest.mark.asyncio
+    async def test_missing_required_arg_returns_error(self) -> None:
+        result = await run_tool("calculator", {})
+        assert "missing required argument" in result.lower()

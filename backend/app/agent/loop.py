@@ -42,6 +42,10 @@ def msg_error(message: str) -> dict[str, Any]:
     return {"type": "error", "message": message}
 
 
+def msg_stopped() -> dict[str, Any]:
+    return {"type": "stopped"}
+
+
 # ---------------------------------------------------------------------------
 # Trace data structures
 # ---------------------------------------------------------------------------
@@ -230,7 +234,7 @@ async def run_react_loop(
                 if stopped_event.is_set():
                     break
                 await send(msg_delta(chunk))
-                await asyncio.sleep(0)  # yield to event loop
+                await asyncio.sleep(0.01)  # yield to event loop (small delay for typewriter effect)
 
             trace.final_response = final
             responded = True
@@ -248,8 +252,10 @@ async def run_react_loop(
             except Exception:
                 final = "I reached my iteration limit."
             for chunk in _split_chunks(final, size=25):
+                if stopped_event.is_set():
+                    break
                 await send(msg_delta(chunk))
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.01)
             trace.final_response = final
 
     trace.usage = {
