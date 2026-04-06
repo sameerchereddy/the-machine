@@ -23,7 +23,7 @@ class OpenAICompatProvider(BaseProvider):
         self.provider = config["provider"]
         self.client = openai.AsyncOpenAI(
             api_key=config.get("api_key", "ollama"),  # ollama ignores the key
-            base_url=config.get("base_url"),  # None → OpenAI default
+            base_url=config.get("base_url"),
         )
 
     async def complete(

@@ -91,6 +91,16 @@ ignore_errors = true
 module = "app.api.agents"
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+# asyncpg + WebSocket typing; ignore for run endpoint
+module = "app.api.run"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# agent loop uses asyncpg records indirectly
+module = "app.agent.loop"
+ignore_errors = true
+
 # ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -33,6 +33,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await syncCookie(data.session.access_token)
           setUser(data.session.user)
         }
+      } catch {
+        // syncCookie failed — still set user so UI isn't stuck
+        if (data.session) setUser(data.session.user)
       } finally {
         setLoading(false)
       }

@@ -71,7 +71,7 @@ const PROVIDERS: Provider[] = [
     id: 'ollama',
     label: 'Ollama (local)',
     fields: [
-      { key: 'base_url', label: 'Base URL', type: 'url', placeholder: 'http://127.0.0.1:11434' },
+      { key: 'base_url', label: 'Base URL', type: 'url', placeholder: 'http://localhost:11434/v1', required: true },
     ],
     defaultModels: ['llama3.2', 'mistral', 'phi4', 'qwen2.5'],
   },
@@ -114,6 +114,7 @@ export default function SetupPage() {
 
   // Form state
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [configName, setConfigName] = useState('')
   const [model, setModel] = useState('')
   const [customModel, setCustomModel] = useState('')
@@ -153,6 +154,7 @@ export default function SetupPage() {
 
   function resetForm() {
     setSelectedProvider(null)
+    setEditingId(null)
     setFieldValues({})
     setModel('')
     setCustomModel('')
@@ -160,6 +162,31 @@ export default function SetupPage() {
     setIsDefault(false)
     setPingResult(null)
     setSaveError('')
+  }
+
+  function handleEdit(c: LLMConfig) {
+    const provider = PROVIDERS.find((p) => p.id === c.provider)
+    if (!provider) return
+    setSelectedProvider(provider)
+    setEditingId(c.id)
+    setConfigName(c.name)
+    setIsDefault(c.is_default)
+    setPingResult(null)
+    setSaveError('')
+    // Pre-fill non-secret fields (base_url etc); leave password fields blank
+    const prefill: Record<string, string> = {}
+    for (const f of provider.fields) {
+      if (f.type !== 'password' && c.config[f.key]) prefill[f.key] = c.config[f.key]
+    }
+    setFieldValues(prefill)
+    // Set model — if it's not in defaultModels, use custom
+    if (provider.defaultModels.includes(c.model)) {
+      setModel(c.model)
+      setCustomModel('')
+    } else {
+      setModel('__custom__')
+      setCustomModel(c.model)
+    }
   }
 
   function buildConfig(): Record<string, string> {
@@ -179,6 +206,31 @@ export default function SetupPage() {
     setSaveError('')
     setSaving(true)
     try {
+      if (editingId) {
+        // Update existing config
+        const cfg = buildConfig()
+        const res = await fetch(`${API}/api/llm-configs/${editingId}`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: configName || selectedProvider.label,
+            model: activeModel(),
+            is_default: isDefault,
+            ...(Object.keys(cfg).length > 0 && { config: cfg }),
+          }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          setSaveError(body.detail ?? 'Failed to update config.')
+          return
+        }
+        await fetchConfigs()
+        resetForm()
+        return
+      }
+
+      // Create new config
       const res = await fetch(`${API}/api/llm-configs`, {
         method: 'POST',
         credentials: 'include',
@@ -266,9 +318,7 @@ export default function SetupPage() {
   const isFormValid =
     !!selectedProvider &&
     !!activeModel() &&
-    selectedProvider.fields
-      .filter((f) => f.required)
-      .every((f) => !!fieldValues[f.key])
+    (!!editingId || selectedProvider.fields.filter((f) => f.required).every((f) => !!fieldValues[f.key]))
 
   return (
     <div className="min-h-screen bg-background font-mono text-foreground">
@@ -333,6 +383,12 @@ export default function SetupPage() {
                       </button>
                     )}
                     <button
+                      onClick={() => handleEdit(c)}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      edit
+                    </button>
+                    <button
                       onClick={() => handleDelete(c.id)}
                       className="text-xs text-destructive hover:opacity-80"
                     >
@@ -365,7 +421,7 @@ export default function SetupPage() {
           <div className="space-y-5">
             <div className="flex items-center justify-between">
               <p className="text-xs uppercase tracking-widest text-muted-foreground">
-                {selectedProvider.label}
+                {editingId ? `Edit — ${selectedProvider.label}` : selectedProvider.label}
               </p>
               <button
                 onClick={resetForm}
@@ -403,7 +459,7 @@ export default function SetupPage() {
                   value={fieldValues[f.key] ?? ''}
                   onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                  placeholder={f.placeholder}
+                  placeholder={editingId && f.type === 'password' ? 'leave blank to keep existing' : f.placeholder}
                 />
               </div>
             ))}
@@ -492,7 +548,7 @@ export default function SetupPage() {
                 disabled={!isFormValid || saving}
                 className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? 'Saving…' : editingId ? 'Update' : 'Save'}
               </button>
             </div>
           </div>
