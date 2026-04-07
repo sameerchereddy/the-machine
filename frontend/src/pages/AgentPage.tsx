@@ -30,6 +30,8 @@ type Agent = {
   kb_similarity_threshold: number
   kb_reranking: boolean
   kb_show_sources: boolean
+  kb_chunk_size: number
+  kb_chunk_overlap: number
   max_iterations: number
   on_max_iterations: string
   max_tool_calls_per_run: number
@@ -40,6 +42,25 @@ type Agent = {
 }
 
 type LLMConfig = { id: string; name: string; provider: string; model: string }
+
+type KnowledgeSource = {
+  id: string
+  name: string
+  source_type: string
+  file_size_bytes: number | null
+  chunk_count: number
+  status: 'pending' | 'indexing' | 'ready' | 'error'
+  error_message: string | null
+  created_at: string
+}
+
+type Memory = {
+  id: string
+  content: string
+  memory_type: string
+  created_at: string
+  expires_at: string | null
+}
 
 type ToolActivity = {
   id: string
@@ -119,6 +140,19 @@ export default function AgentPage() {
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState('')
 
+  // Knowledge base state
+  const [sources, setSources] = useState<KnowledgeSource[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [embeddingKey, setEmbeddingKey] = useState('')
+  const [savingEmbKey, setSavingEmbKey] = useState(false)
+  const [embKeySaved, setEmbKeySaved] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+
+  // Memory state
+  const [memories, setMemories] = useState<Memory[]>([])
+
   // Chat state
   const [launched, setLaunched] = useState(false)
   const [running, setRunning] = useState(false)
@@ -158,7 +192,112 @@ export default function AgentPage() {
     } finally {
       setLoading(false)
     }
+    await Promise.all([loadSources(), loadMemories()])
   }
+
+  async function loadSources() {
+    const res = await fetch(`${API}/api/agents/${id}/knowledge`, { credentials: 'include' })
+    if (res.ok) {
+      const data: KnowledgeSource[] = await res.json()
+      setSources(data)
+      // Poll while any source is still processing
+      if (data.some((s) => s.status === 'pending' || s.status === 'indexing')) {
+        if (!pollRef.current) {
+          pollRef.current = setInterval(async () => {
+            const r = await fetch(`${API}/api/agents/${id}/knowledge`, { credentials: 'include' })
+            if (r.ok) {
+              const updated: KnowledgeSource[] = await r.json()
+              setSources(updated)
+              if (!updated.some((s) => s.status === 'pending' || s.status === 'indexing')) {
+                clearInterval(pollRef.current!)
+                pollRef.current = null
+              }
+            }
+          }, 3000)
+        }
+      }
+    }
+  }
+
+  async function loadMemories() {
+    const res = await fetch(`${API}/api/agents/${id}/memories`, { credentials: 'include' })
+    if (res.ok) setMemories(await res.json())
+  }
+
+  async function handleUpload(files: FileList) {
+    if (!files.length) return
+    setUploading(true)
+    try {
+      for (const file of Array.from(files)) {
+        const form = new FormData()
+        form.append('file', file)
+        const res = await fetch(`${API}/api/agents/${id}/knowledge/upload`, {
+          method: 'POST',
+          credentials: 'include',
+          body: form,
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          setError((body as { detail?: string }).detail ?? 'Upload failed.')
+        }
+      }
+    } finally {
+      setUploading(false)
+      await loadSources()
+    }
+  }
+
+  async function deleteSource(sourceId: string) {
+    const res = await fetch(`${API}/api/agents/${id}/knowledge/${sourceId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (res.ok) {
+      setSources((prev) => prev.filter((s) => s.id !== sourceId))
+    } else {
+      setError('Failed to delete source. Please try again.')
+    }
+  }
+
+  async function deleteMemory(memId: string) {
+    const res = await fetch(`${API}/api/agents/${id}/memories/${memId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (res.ok) {
+      setMemories((prev) => prev.filter((m) => m.id !== memId))
+    } else {
+      setError('Failed to delete memory. Please try again.')
+    }
+  }
+
+  async function saveEmbeddingKey() {
+    if (!embeddingKey.trim()) return
+    setSavingEmbKey(true)
+    try {
+      const res = await fetch(`${API}/api/agents/${id}/knowledge/embedding-key`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: embeddingKey }),
+      })
+      if (res.ok) {
+        setEmbeddingKey('')
+        setEmbKeySaved(true)
+        setTimeout(() => setEmbKeySaved(false), 2000)
+      } else {
+        const body = await res.json().catch(() => ({}))
+        setError((body as { detail?: string }).detail ?? 'Failed to save key.')
+      }
+    } finally {
+      setSavingEmbKey(false)
+    }
+  }
+
+  // Clean up poll interval on unmount
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [])
 
   function update(patch: Partial<Agent>) {
     setAgent((a) => a ? { ...a, ...patch } : a)
@@ -556,6 +695,145 @@ export default function AgentPage() {
             </div>
           </Block>
 
+          {/* Knowledge Base */}
+          <Block title="Knowledge Base">
+            {/* Embedding key — only shown for non-OpenAI providers */}
+            {(() => {
+              const provider = llmConfigs.find((c) => c.id === agent.llm_config_id)?.provider
+              if (!provider) return (
+                <p className="text-xs text-muted-foreground">Configure an LLM above to enable the Knowledge Base.</p>
+              )
+              if (provider === 'openai') return (
+                <p className="text-xs text-muted-foreground">Embeddings: using your configured OpenAI key.</p>
+              )
+              return (
+                <Field label="OpenAI API key for embeddings (text-embedding-3-small)">
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={embeddingKey}
+                      onChange={(e) => setEmbeddingKey(e.target.value)}
+                      className={`${inputCls} flex-1`}
+                      placeholder="sk-… (write-only, never displayed)"
+                    />
+                    <button
+                      onClick={saveEmbeddingKey}
+                      disabled={savingEmbKey || !embeddingKey.trim()}
+                      className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 shrink-0"
+                    >
+                      {embKeySaved ? 'Saved ✓' : savingEmbKey ? 'Saving…' : 'Save key'}
+                    </button>
+                  </div>
+                </Field>
+              )
+            })()}
+
+            {/* Chunk settings */}
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Chunk size (tokens)">
+                <input
+                  type="number"
+                  value={agent.kb_chunk_size}
+                  onChange={(e) => update({ kb_chunk_size: Number(e.target.value) })}
+                  className={inputCls}
+                  min={64}
+                />
+              </Field>
+              <Field label="Chunk overlap (tokens)">
+                <input
+                  type="number"
+                  value={agent.kb_chunk_overlap}
+                  onChange={(e) => update({ kb_chunk_overlap: Number(e.target.value) })}
+                  className={inputCls}
+                  min={0}
+                />
+              </Field>
+              <Field label="Top-K results">
+                <input
+                  type="number"
+                  value={agent.kb_top_k}
+                  onChange={(e) => update({ kb_top_k: Number(e.target.value) })}
+                  className={inputCls}
+                  min={1}
+                  max={20}
+                />
+              </Field>
+              <Field label="Similarity threshold">
+                <input
+                  type="number"
+                  value={agent.kb_similarity_threshold}
+                  onChange={(e) => update({ kb_similarity_threshold: Number(e.target.value) })}
+                  className={inputCls}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                />
+              </Field>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={agent.kb_show_sources}
+                onChange={(e) => update({ kb_show_sources: e.target.checked })}
+                className="h-4 w-4"
+              />
+              <span className="text-xs">Show source attribution in results</span>
+            </label>
+
+            {/* Drop zone */}
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => { e.preventDefault(); setDragOver(false); handleUpload(e.dataTransfer.files) }}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-md p-5 text-center cursor-pointer text-xs text-muted-foreground transition-colors
+                ${dragOver ? 'border-ring bg-secondary' : 'border-border hover:border-ring'}`}
+            >
+              {uploading ? 'Uploading…' : 'Drop PDF, TXT, DOCX, or MD — or click to browse'}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.txt,.md,.docx"
+              multiple
+              className="hidden"
+              onChange={(e) => e.target.files && handleUpload(e.target.files)}
+            />
+
+            {/* Source list */}
+            {sources.length > 0 && (
+              <div className="space-y-1.5">
+                {sources.map((src) => (
+                  <div key={src.id} className="space-y-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs truncate flex-1">{src.name}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {(src.status === 'pending' || src.status === 'indexing') && (
+                          <span className="text-xs text-yellow-400 animate-pulse">indexing…</span>
+                        )}
+                        {src.status === 'ready' && (
+                          <span className="text-xs text-green-400">{src.chunk_count} chunks</span>
+                        )}
+                        {src.status === 'error' && (
+                          <span className="text-xs text-destructive">error</span>
+                        )}
+                        <button
+                          onClick={() => deleteSource(src.id)}
+                          className="text-xs text-muted-foreground hover:text-destructive"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                    {src.status === 'error' && src.error_message && (
+                      <p className="text-xs text-destructive pl-1">{src.error_message}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Block>
+
           {/* Memory */}
           <Block title="Memory">
             <div className="grid grid-cols-2 gap-3">
@@ -573,6 +851,15 @@ export default function AgentPage() {
                   type="number"
                   value={agent.max_memories}
                   onChange={(e) => update({ max_memories: Number(e.target.value) })}
+                  className={inputCls}
+                  min={1}
+                />
+              </Field>
+              <Field label="Retention (days)">
+                <input
+                  type="number"
+                  value={agent.retention_days}
+                  onChange={(e) => update({ retention_days: Number(e.target.value) })}
                   className={inputCls}
                   min={1}
                 />
@@ -598,6 +885,33 @@ export default function AgentPage() {
                 <span className="text-xs">Long-term memory</span>
               </label>
             </div>
+
+            {/* Stored memories — visible only when long-term is enabled */}
+            {agent.long_term_enabled && (
+              <div className="space-y-2 pt-1">
+                <p className="text-xs text-muted-foreground border-t border-border pt-2">Stored memories</p>
+                {memories.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No memories stored yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {memories.map((m) => (
+                      <div key={m.id} className="flex items-start justify-between gap-2">
+                        <span className="text-xs flex-1">
+                          <span className="text-muted-foreground">[{m.memory_type}]</span>{' '}
+                          {m.content.length > 80 ? m.content.slice(0, 80) + '…' : m.content}
+                        </span>
+                        <button
+                          onClick={() => deleteMemory(m.id)}
+                          className="text-xs text-muted-foreground hover:text-destructive shrink-0"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </Block>
 
           {/* Guardrails */}

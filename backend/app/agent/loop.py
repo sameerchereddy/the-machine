@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from app.agent.tools import TOOL_SCHEMAS, run_tool
+from app.agent.tools import KB_TOOL_SCHEMA, MEMORY_TOOL_SCHEMA, TOOL_SCHEMAS, ToolContext, run_tool
 from app.llm.adapter import ProviderWithRetry
 from app.llm.types import ToolCall, Usage
 
@@ -90,7 +90,10 @@ class RunTrace:
 # ---------------------------------------------------------------------------
 
 
-def build_system_prompt(agent: dict[str, Any]) -> str:
+def build_system_prompt(
+    agent: dict[str, Any],
+    memories: list[dict[str, Any]] | None = None,
+) -> str:
     parts: list[str] = []
     if agent.get("persona_name"):
         parts.append(f"You are {agent['persona_name']}.")
@@ -107,6 +110,9 @@ def build_system_prompt(agent: dict[str, Any]) -> str:
     if ctx:
         ctx_lines = "\n".join(f"  {e['key']}: {e['value']}" for e in ctx if e.get("key"))
         parts.append(f"Context:\n{ctx_lines}")
+    if memories:
+        mem_lines = "\n".join(f"  [{m['memory_type']}] {m['content']}" for m in memories)
+        parts.append(f"Long-term memories:\n{mem_lines}")
     return "\n\n".join(parts)
 
 
@@ -124,6 +130,9 @@ async def run_react_loop(
     user_message: str,
     send: SendFn,
     stopped_event: asyncio.Event,
+    tool_context: ToolContext | None = None,
+    memories: list[dict[str, Any]] | None = None,
+    has_kb_sources: bool = False,
 ) -> RunTrace:
     """
     Execute one ReAct turn for a user message.
@@ -138,8 +147,15 @@ async def run_react_loop(
     on_max: str = agent.get("on_max_iterations") or "return_partial"
     supports_tools: bool = bool(llm_config.get("supports_tool_calls", True))
 
-    tools = TOOL_SCHEMAS if supports_tools else None
-    system_prompt = build_system_prompt(agent)
+    # Build tool list — add optional KB / memory tools only when configured
+    active_tools: list[dict[str, Any]] = list(TOOL_SCHEMAS)
+    if tool_context and tool_context.embedding_api_key and has_kb_sources:
+        active_tools.append(KB_TOOL_SCHEMA)
+    if agent.get("long_term_enabled") and tool_context:
+        active_tools.append(MEMORY_TOOL_SCHEMA)
+
+    tools = active_tools if supports_tools else None
+    system_prompt = build_system_prompt(agent, memories=memories)
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -209,7 +225,7 @@ async def run_react_loop(
 
             # ── Observe: run tools in parallel ──────────────────────────────
             async def _run_one(tc: ToolCall) -> tuple[str, str]:
-                result = await run_tool(tc.name, tc.arguments)
+                result = await run_tool(tc.name, tc.arguments, context=tool_context)
                 return tc.id, result
 
             results = await asyncio.gather(*[_run_one(tc) for tc in calls_this_iter])

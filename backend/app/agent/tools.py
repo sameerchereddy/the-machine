@@ -5,16 +5,22 @@ Each tool is a pure async function returning a plain string result.
 
 import ast
 import asyncio
+import contextlib
 import ipaddress
 import math
 import re
 import socket
-from datetime import UTC, datetime
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, urlparse
 
+import asyncpg
 import httpx
+import pgvector.asyncpg
 from bs4 import BeautifulSoup
+from openai import AsyncOpenAI
 
 # ---------------------------------------------------------------------------
 # Tool schemas — OpenAI function-calling format
@@ -98,6 +104,80 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
 ]
+
+# ---------------------------------------------------------------------------
+# Tool context (carries per-run DB + embedding credentials to KB/memory tools)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ToolContext:
+    """
+    Carries per-run configuration for tools that need DB access or credentials.
+    Passed through from the WS handler → loop → run_tool.
+    Each KB/memory tool opens its own asyncpg connection so parallel tool
+    calls in asyncio.gather don't contend on a single connection.
+    """
+
+    agent_id: str
+    user_id: str
+    database_url: str
+    embedding_api_key: str | None = None
+    top_k: int = 4
+    similarity_threshold: float = 0.7
+    max_memories: int = 20
+    retention_days: int = 90
+    kb_show_sources: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Optional tool schemas (added to the run's tool list only when configured)
+# ---------------------------------------------------------------------------
+
+KB_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "knowledge_search",
+        "description": (
+            "Search the agent's knowledge base documents for relevant information. "
+            "Use when the user asks about uploaded documents or topics that may be in the knowledge base."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query to find relevant passages"}
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+MEMORY_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "save_memory",
+        "description": (
+            "Save an important piece of information to long-term memory. "
+            "Use sparingly — only for facts, preferences, or goals the user explicitly states "
+            "and wants remembered across sessions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The information to remember, stated as a clear fact",
+                },
+                "memory_type": {
+                    "type": "string",
+                    "enum": ["fact", "preference", "goal"],
+                    "description": "Category of the memory",
+                },
+            },
+            "required": ["content", "memory_type"],
+        },
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Calculator
@@ -326,6 +406,118 @@ async def tool_web_search(query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge search
+# ---------------------------------------------------------------------------
+
+_EMBED_MODEL = "text-embedding-3-small"
+
+
+async def tool_knowledge_search(query: str, ctx: ToolContext) -> str:
+    if not ctx.embedding_api_key:
+        return "Error: knowledge search is not configured — add an embedding API key in the Knowledge Base block."
+
+    # Embed the query
+    oai = AsyncOpenAI(api_key=ctx.embedding_api_key)
+    try:
+        embed_resp = await oai.embeddings.create(model=_EMBED_MODEL, input=[query])
+        query_vec = embed_resp.data[0].embedding
+    except Exception as exc:
+        return f"Error generating query embedding: {exc}"
+
+    # Similarity search via pgvector
+    conn: asyncpg.Connection = await asyncpg.connect(ctx.database_url)
+    try:
+        await pgvector.asyncpg.register_vector(conn)
+        rows = await conn.fetch(
+            """
+            SELECT content, metadata,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM knowledge_chunks
+            WHERE agent_id = $2 AND user_id = $3
+              AND 1 - (embedding <=> $1::vector) >= $4
+            ORDER BY embedding <=> $1::vector
+            LIMIT $5
+            """,
+            query_vec,
+            uuid.UUID(ctx.agent_id),
+            uuid.UUID(ctx.user_id),
+            ctx.similarity_threshold,
+            ctx.top_k,
+        )
+    except Exception:
+        return "Error: knowledge base search failed. Please try again."
+    finally:
+        with contextlib.suppress(Exception):
+            await conn.close()
+
+    if not rows:
+        return "No relevant information found in the knowledge base for that query."
+
+    parts: list[str] = []
+    for i, row in enumerate(rows, 1):
+        meta: dict[str, Any] = row["metadata"] or {}
+        source = meta.get("source_name", "unknown") if ctx.kb_show_sources else ""
+        header = f"[{i}] Source: {source} (similarity: {row['similarity']:.2f})" if ctx.kb_show_sources else f"[{i}]"
+        parts.append(f"{header}\n{row['content']}")
+
+    result = "\n\n---\n\n".join(parts)
+    if len(result) > _TOOL_RESULT_LIMIT:
+        result = result[:_TOOL_RESULT_LIMIT] + "\n\n[Results truncated]"
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Save memory
+# ---------------------------------------------------------------------------
+
+
+_VALID_MEMORY_TYPES = {"fact", "preference", "goal"}
+
+
+async def tool_save_memory(content: str, memory_type: str, ctx: ToolContext) -> str:
+    if memory_type not in _VALID_MEMORY_TYPES:
+        return f"Error: invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(_VALID_MEMORY_TYPES))}"
+
+    try:
+        return await _save_memory(content, memory_type, ctx)
+    except Exception:
+        return "Error: failed to save memory. Please try again."
+
+
+async def _save_memory(content: str, memory_type: str, ctx: ToolContext) -> str:
+    conn = await asyncpg.connect(ctx.database_url)
+    try:
+        count: int = await conn.fetchval(
+            "SELECT COUNT(*) FROM agent_memories WHERE agent_id = $1 AND user_id = $2 "
+            "AND (expires_at IS NULL OR expires_at > now())",
+            uuid.UUID(ctx.agent_id),
+            uuid.UUID(ctx.user_id),
+        )
+        if count >= ctx.max_memories:
+            return f"Memory limit reached ({ctx.max_memories}). Delete old memories before saving new ones."
+
+        expires_at = (
+            datetime.now(UTC) + timedelta(days=ctx.retention_days)
+            if ctx.retention_days and ctx.retention_days > 0
+            else None
+        )
+        await conn.execute(
+            """INSERT INTO agent_memories (agent_id, user_id, content, memory_type, expires_at)
+               VALUES ($1, $2, $3, $4, $5)""",
+            uuid.UUID(ctx.agent_id),
+            uuid.UUID(ctx.user_id),
+            content[:2000],
+            memory_type,
+            expires_at,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await conn.close()
+
+    return f"Remembered: {content[:100]}"
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -334,10 +526,16 @@ _REQUIRED_ARGS: dict[str, list[str]] = {
     "url_reader": ["url"],
     "wikipedia_search": ["query"],
     "web_search": ["query"],
+    "knowledge_search": ["query"],
+    "save_memory": ["content", "memory_type"],
 }
 
 
-async def run_tool(name: str, arguments: dict[str, Any]) -> str:
+async def run_tool(
+    name: str,
+    arguments: dict[str, Any],
+    context: ToolContext | None = None,
+) -> str:
     """Route a tool call to the correct implementation."""
     required = _REQUIRED_ARGS.get(name, [])
     missing = [arg for arg in required if not arguments.get(arg)]
@@ -354,5 +552,13 @@ async def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return await tool_wikipedia_search(arguments["query"])
     elif name == "web_search":
         return await tool_web_search(arguments["query"])
+    elif name == "knowledge_search":
+        if context is None:
+            return "Error: knowledge search is not available in this context."
+        return await tool_knowledge_search(arguments["query"], context)
+    elif name == "save_memory":
+        if context is None:
+            return "Error: memory tool is not available in this context."
+        return await tool_save_memory(arguments["content"], arguments["memory_type"], context)
     else:
         return f"Unknown tool: {name!r}"
