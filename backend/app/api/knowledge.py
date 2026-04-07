@@ -242,8 +242,10 @@ async def upload_knowledge_source(
         logger.exception("Storage upload failed for source %s; rolling back DB row", source_id)
         try:
             conn2 = await _get_conn()
-            await conn2.execute("DELETE FROM knowledge_sources WHERE id=$1", uuid.UUID(source_id))
-            await conn2.close()
+            try:
+                await conn2.execute("DELETE FROM knowledge_sources WHERE id=$1", uuid.UUID(source_id))
+            finally:
+                await conn2.close()
         except Exception:
             pass
         raise HTTPException(
