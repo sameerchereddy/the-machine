@@ -10,7 +10,7 @@ import math
 import re
 import socket
 import uuid
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -446,7 +446,10 @@ async def tool_knowledge_search(query: str, ctx: ToolContext) -> str:
     except Exception as exc:
         return f"Error searching knowledge base: {exc}"
     finally:
-        await conn.close()
+        try:
+            await conn.close()
+        except Exception:
+            pass
 
     if not rows:
         return "No relevant information found in the knowledge base for that query."
@@ -458,7 +461,10 @@ async def tool_knowledge_search(query: str, ctx: ToolContext) -> str:
         header = f"[{i}] Source: {source} (similarity: {row['similarity']:.2f})" if ctx.kb_show_sources else f"[{i}]"
         parts.append(f"{header}\n{row['content']}")
 
-    return "\n\n---\n\n".join(parts)[:_TOOL_RESULT_LIMIT]
+    result = "\n\n---\n\n".join(parts)
+    if len(result) > _TOOL_RESULT_LIMIT:
+        result = result[:_TOOL_RESULT_LIMIT] + "\n\n[Results truncated]"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +472,13 @@ async def tool_knowledge_search(query: str, ctx: ToolContext) -> str:
 # ---------------------------------------------------------------------------
 
 
+_VALID_MEMORY_TYPES = {"fact", "preference", "goal"}
+
+
 async def tool_save_memory(content: str, memory_type: str, ctx: ToolContext) -> str:
+    if memory_type not in _VALID_MEMORY_TYPES:
+        return f"Error: invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(_VALID_MEMORY_TYPES))}"
+
     conn = await asyncpg.connect(ctx.database_url)
     try:
         count: int = await conn.fetchval(
@@ -478,7 +490,11 @@ async def tool_save_memory(content: str, memory_type: str, ctx: ToolContext) -> 
         if count >= ctx.max_memories:
             return f"Memory limit reached ({ctx.max_memories}). Delete old memories before saving new ones."
 
-        expires_at = datetime.now(UTC) + timedelta(days=ctx.retention_days) if ctx.retention_days else None
+        expires_at = (
+            datetime.now(UTC) + timedelta(days=ctx.retention_days)
+            if ctx.retention_days and ctx.retention_days > 0
+            else None
+        )
         await conn.execute(
             """INSERT INTO agent_memories (agent_id, user_id, content, memory_type, expires_at)
                VALUES ($1, $2, $3, $4, $5)""",
@@ -489,7 +505,10 @@ async def tool_save_memory(content: str, memory_type: str, ctx: ToolContext) -> 
             expires_at,
         )
     finally:
-        await conn.close()
+        try:
+            await conn.close()
+        except Exception:
+            pass
 
     return f"Remembered: {content[:100]}"
 

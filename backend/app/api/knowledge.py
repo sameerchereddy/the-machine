@@ -13,6 +13,8 @@ Routes:
 
 from __future__ import annotations
 
+import os
+import re
 import uuid
 
 import asyncpg
@@ -46,12 +48,19 @@ async def _get_conn() -> asyncpg.Connection:
     return await asyncpg.connect(settings.database_url)
 
 
+def _parse_uuid(value: str, label: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {label}")
+
+
 async def _require_agent(conn: asyncpg.Connection, agent_id: str, user_id: str) -> asyncpg.Record:
     """Fetch agent row and assert ownership. Raises 404 if not found."""
     row = await conn.fetchrow(
         "SELECT * FROM agents WHERE id = $1 AND user_id = $2",
-        uuid.UUID(agent_id),
-        uuid.UUID(user_id),
+        _parse_uuid(agent_id, "agent_id"),
+        _parse_uuid(user_id, "user_id"),
     )
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -130,6 +139,10 @@ async def upload_knowledge_source(
             detail=f"File too large. Maximum size is {max_mb} MB.",
         )
 
+    # Sanitize filename: basename only, strip non-printable chars, cap length
+    raw_name = os.path.basename(file.filename or f"document.{source_type}")
+    safe_name = re.sub(r"[^\x20-\x7E]", "", raw_name)[:255] or f"document.{source_type}"
+
     conn = await _get_conn()
     try:
         agent_row = await _require_agent(conn, agent_id, user_id)
@@ -205,7 +218,7 @@ async def upload_knowledge_source(
             uuid.UUID(source_id),
             uuid.UUID(agent_id),
             uuid.UUID(user_id),
-            file.filename or f"document.{source_type}",
+            safe_name,
             source_type,
             storage_path,
             len(data),
@@ -220,7 +233,7 @@ async def upload_knowledge_source(
         agent_id=agent_id,
         user_id=user_id,
         storage_path=storage_path,
-        source_name=file.filename or f"document.{source_type}",
+        source_name=safe_name,
         source_type=source_type,
         embedding_api_key=embedding_api_key,
         chunk_size=int(agent_row["kb_chunk_size"]),
@@ -283,16 +296,16 @@ async def delete_knowledge_source(
         await _require_agent(conn, agent_id, user_id)
         row = await conn.fetchrow(
             "SELECT storage_path FROM knowledge_sources WHERE id=$1 AND agent_id=$2 AND user_id=$3",
-            uuid.UUID(source_id),
-            uuid.UUID(agent_id),
-            uuid.UUID(user_id),
+            _parse_uuid(source_id, "source_id"),
+            _parse_uuid(agent_id, "agent_id"),
+            _parse_uuid(user_id, "user_id"),
         )
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
 
         storage_path: str = row["storage_path"]
         # Delete DB row first (cascades to knowledge_chunks)
-        await conn.execute("DELETE FROM knowledge_sources WHERE id=$1", uuid.UUID(source_id))
+        await conn.execute("DELETE FROM knowledge_sources WHERE id=$1", _parse_uuid(source_id, "source_id"))
     finally:
         await conn.close()
 
@@ -311,18 +324,24 @@ async def save_embedding_key(
     current_user: CurrentUser,
 ) -> None:
     user_id: str = current_user["id"]
-    if not body.api_key.strip():
+    key = body.api_key.strip()
+    if not key:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="api_key must not be empty")
+    if not key.startswith("sk-"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="api_key does not look like a valid OpenAI key (must start with 'sk-')",
+        )
 
-    enc, iv = encrypt({"api_key": body.api_key}, user_id, agent_id)
+    enc, iv = encrypt({"api_key": key}, user_id, agent_id)
     conn = await _get_conn()
     try:
         result = await conn.execute(
             "UPDATE agents SET embedding_api_key_enc=$1, embedding_api_key_iv=$2 WHERE id=$3 AND user_id=$4",
             enc,
             iv,
-            uuid.UUID(agent_id),
-            uuid.UUID(user_id),
+            _parse_uuid(agent_id, "agent_id"),
+            _parse_uuid(user_id, "user_id"),
         )
         if result == "UPDATE 0":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -379,9 +398,9 @@ async def delete_memory(
     try:
         result = await conn.execute(
             "DELETE FROM agent_memories WHERE id=$1 AND agent_id=$2 AND user_id=$3",
-            uuid.UUID(memory_id),
-            uuid.UUID(agent_id),
-            uuid.UUID(user_id),
+            _parse_uuid(memory_id, "memory_id"),
+            _parse_uuid(agent_id, "agent_id"),
+            _parse_uuid(user_id, "user_id"),
         )
         if result == "DELETE 0":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")

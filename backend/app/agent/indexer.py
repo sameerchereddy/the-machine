@@ -98,7 +98,8 @@ def chunk_text(text: str, chunk_size: int = 512, chunk_overlap: int = 64) -> lis
         if len(current) + len(sentence) + 1 > chunk_chars and current:
             chunks.append(current.strip())
             # Keep the overlap tail as the start of the next chunk
-            current = current[-overlap_chars:] + " " + sentence if overlap_chars else sentence
+            tail = current[-min(overlap_chars, len(current)):] if overlap_chars else ""
+            current = (tail + " " + sentence).lstrip() if tail else sentence
         else:
             current = (current + " " + sentence).lstrip()
 
@@ -135,6 +136,7 @@ async def index_source(
             "UPDATE knowledge_sources SET status='indexing', updated_at=now() WHERE id=$1",
             uuid.UUID(source_id),
         )
+        logger.info("[source=%s] indexing started: %s", source_id, source_name)
 
         # ── Download from Supabase Storage ──────────────────────────────────
         sb = create_client(settings.supabase_url, settings.supabase_service_key)
@@ -142,6 +144,7 @@ async def index_source(
             None,
             lambda: sb.storage.from_(settings.storage_bucket).download(storage_path),
         )
+        logger.info("[source=%s] downloaded %d bytes", source_id, len(raw))
 
         # ── Extract text (CPU-bound — run in thread pool) ───────────────────
         text: str = await asyncio.get_running_loop().run_in_executor(
@@ -155,13 +158,31 @@ async def index_source(
         if not chunks:
             raise ValueError("Document produced no chunks after extraction.")
 
-        # ── Embed (batched) ──────────────────────────────────────────────────
+        # ── Embed (batched, with retry on rate-limit) ────────────────────────
         oai = AsyncOpenAI(api_key=embedding_api_key)
         all_embeddings: list[list[float]] = []
         for i in range(0, len(chunks), _EMBED_BATCH_SIZE):
             batch = chunks[i : i + _EMBED_BATCH_SIZE]
-            resp = await oai.embeddings.create(model=_EMBED_MODEL, input=batch)
-            all_embeddings.extend([e.embedding for e in resp.data])
+            for attempt in range(3):
+                try:
+                    resp = await oai.embeddings.create(model=_EMBED_MODEL, input=batch)
+                    break
+                except Exception as exc:
+                    if attempt == 2:
+                        raise
+                    # Exponential backoff for rate-limit / transient errors
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "Embedding attempt %d failed for source %s (%s); retrying in %ds",
+                        attempt + 1, source_id, exc, wait,
+                    )
+                    await asyncio.sleep(wait)
+            batch_embeddings = [e.embedding for e in resp.data]
+            if len(batch_embeddings) != len(batch):
+                raise ValueError(
+                    f"Embedding count mismatch: got {len(batch_embeddings)}, expected {len(batch)}"
+                )
+            all_embeddings.extend(batch_embeddings)
 
         # ── Insert vectors ───────────────────────────────────────────────────
         await pgvector.asyncpg.register_vector(conn)
@@ -190,14 +211,21 @@ async def index_source(
             len(chunks),
             uuid.UUID(source_id),
         )
+        logger.info("[source=%s] indexed %d chunks", source_id, len(chunks))
 
     except Exception as exc:
         logger.exception("Indexing failed for source %s", source_id)
+        # Sanitise: only expose the exception type + a generic phrase, never raw messages
+        # which may contain API keys, connection strings, or internal paths.
+        safe_msg = f"{type(exc).__name__}: indexing failed"
+        if isinstance(exc, ValueError):
+            # ValueError messages are always our own, safe to surface
+            safe_msg = str(exc)[:500]
         if conn:
             try:
                 await conn.execute(
                     "UPDATE knowledge_sources SET status='error', error_message=$1, updated_at=now() WHERE id=$2",
-                    str(exc)[:500],
+                    safe_msg,
                     uuid.UUID(source_id),
                 )
             except Exception:
