@@ -444,8 +444,8 @@ async def tool_knowledge_search(query: str, ctx: ToolContext) -> str:
             ctx.similarity_threshold,
             ctx.top_k,
         )
-    except Exception as exc:
-        return f"Error searching knowledge base: {exc}"
+    except Exception:
+        return "Error: knowledge base search failed. Please try again."
     finally:
         with contextlib.suppress(Exception):
             await conn.close()
@@ -478,6 +478,13 @@ async def tool_save_memory(content: str, memory_type: str, ctx: ToolContext) -> 
     if memory_type not in _VALID_MEMORY_TYPES:
         return f"Error: invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(_VALID_MEMORY_TYPES))}"
 
+    try:
+        return await _save_memory(content, memory_type, ctx)
+    except Exception:
+        return "Error: failed to save memory. Please try again."
+
+
+async def _save_memory(content: str, memory_type: str, ctx: ToolContext) -> str:
     conn = await asyncpg.connect(ctx.database_url)
     try:
         count: int = await conn.fetchval(

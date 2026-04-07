@@ -34,6 +34,18 @@ _EMBED_MODEL = "text-embedding-3-small"
 _EMBED_BATCH_SIZE = 100  # chunks per OpenAI embeddings request
 
 
+def _is_retriable_openai_error(exc: Exception) -> bool:
+    """Return True for rate-limit and transient server errors; False for auth/bad-request."""
+    import openai  # lazy import — only needed here
+
+    if isinstance(exc, openai.RateLimitError):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        return exc.status_code >= 500
+    # Network / timeout errors are always retriable
+    return isinstance(exc, (openai.APIConnectionError, openai.APITimeoutError))
+
+
 # ---------------------------------------------------------------------------
 # Text extraction
 # ---------------------------------------------------------------------------
@@ -169,9 +181,11 @@ async def index_source(
                     resp = await oai.embeddings.create(model=_EMBED_MODEL, input=batch)
                     break
                 except Exception as exc:
-                    if attempt == 2:
+                    # Only retry on rate-limit (429) and transient server errors (5xx).
+                    # Auth errors (401/403) and bad-request (400) are permanent — raise immediately.
+                    retriable = _is_retriable_openai_error(exc)
+                    if attempt == 2 or not retriable:
                         raise
-                    # Exponential backoff for rate-limit / transient errors
                     wait = 2 ** attempt
                     logger.warning(
                         "Embedding attempt %d failed for source %s (%s); retrying in %ds",

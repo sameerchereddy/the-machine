@@ -13,6 +13,7 @@ Routes:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
@@ -28,6 +29,9 @@ from app.core.deps import CurrentUser
 from app.core.encryption import decrypt, encrypt
 
 router = APIRouter(prefix="/api/agents", tags=["knowledge"])
+logger = logging.getLogger(__name__)
+
+_FILENAME_RE = re.compile(r"[^\x20-\x7E]")
 
 _ALLOWED_TYPES: dict[str, str] = {
     "application/pdf": "pdf",
@@ -129,11 +133,18 @@ async def upload_knowledge_source(
                 detail="Unsupported file type. Allowed: PDF, TXT, MD, DOCX.",
             )
 
-    # File size check
-    max_bytes = (settings.max_kb_file_size_mb if settings else 20) * 1024 * 1024
+    max_bytes = settings.max_kb_file_size_mb * 1024 * 1024
+    max_mb = settings.max_kb_file_size_mb
+
+    # Reject oversized uploads before buffering: check Content-Length header first
+    if file.size and file.size > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size is {max_mb} MB.",
+        )
+
     data = await file.read()
     if len(data) > max_bytes:
-        max_mb = max_bytes // (1024 * 1024)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large. Maximum size is {max_mb} MB.",
@@ -141,7 +152,7 @@ async def upload_knowledge_source(
 
     # Sanitize filename: basename only, strip non-printable chars, cap length
     raw_name = os.path.basename(file.filename or f"document.{source_type}")
-    safe_name = re.sub(r"[^\x20-\x7E]", "", raw_name)[:255] or f"document.{source_type}"
+    safe_name = _FILENAME_RE.sub("", raw_name)[:255] or f"document.{source_type}"
 
     conn = await _get_conn()
     try:
@@ -199,17 +210,9 @@ async def upload_knowledge_source(
                 ),
             )
 
-        # Upload to Supabase Storage
-        storage_path = f"{user_id}/{agent_id}/{uuid.uuid4()}.{source_type}"
-        sb = create_client(settings.supabase_url, settings.supabase_service_key)
-        sb.storage.from_(settings.storage_bucket).upload(
-            path=storage_path,
-            file=data,
-            file_options={"content-type": content_type or "application/octet-stream"},
-        )
-
-        # Insert knowledge_sources row
+        # Insert DB row first — if this fails, nothing is uploaded to Storage
         source_id = str(uuid.uuid4())
+        storage_path = f"{user_id}/{agent_id}/{source_id}.{source_type}"
         row = await conn.fetchrow(
             """INSERT INTO knowledge_sources
                    (id, agent_id, user_id, name, source_type, storage_path, file_size_bytes, status)
@@ -225,6 +228,28 @@ async def upload_knowledge_source(
         )
     finally:
         await conn.close()
+
+    # Upload to Supabase Storage after DB row is committed
+    # If upload fails, delete the DB row so the user can retry cleanly
+    sb = create_client(settings.supabase_url, settings.supabase_service_key)
+    try:
+        sb.storage.from_(settings.storage_bucket).upload(
+            path=storage_path,
+            file=data,
+            file_options={"content-type": content_type or "application/octet-stream"},
+        )
+    except Exception:
+        logger.exception("Storage upload failed for source %s; rolling back DB row", source_id)
+        try:
+            conn2 = await _get_conn()
+            await conn2.execute("DELETE FROM knowledge_sources WHERE id=$1", uuid.UUID(source_id))
+            await conn2.close()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="File upload to storage failed. Please try again.",
+        ) from None
 
     # Kick off indexing in the background
     background_tasks.add_task(
@@ -262,9 +287,10 @@ async def list_knowledge_sources(
     try:
         await _require_agent(conn, agent_id, user_id)
         rows = await conn.fetch(
-            "SELECT * FROM knowledge_sources WHERE agent_id=$1 AND user_id=$2 ORDER BY created_at DESC",
-            uuid.UUID(agent_id),
-            uuid.UUID(user_id),
+            """SELECT id, name, source_type, file_size_bytes, chunk_count, status, error_message, created_at
+               FROM knowledge_sources WHERE agent_id=$1 AND user_id=$2 ORDER BY created_at DESC""",
+            _parse_uuid(agent_id, "agent_id"),
+            _parse_uuid(user_id, "user_id"),
         )
     finally:
         await conn.close()

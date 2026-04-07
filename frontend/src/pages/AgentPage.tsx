@@ -248,19 +248,27 @@ export default function AgentPage() {
   }
 
   async function deleteSource(sourceId: string) {
-    await fetch(`${API}/api/agents/${id}/knowledge/${sourceId}`, {
+    const res = await fetch(`${API}/api/agents/${id}/knowledge/${sourceId}`, {
       method: 'DELETE',
       credentials: 'include',
     })
-    setSources((prev) => prev.filter((s) => s.id !== sourceId))
+    if (res.ok) {
+      setSources((prev) => prev.filter((s) => s.id !== sourceId))
+    } else {
+      setError('Failed to delete source. Please try again.')
+    }
   }
 
   async function deleteMemory(memId: string) {
-    await fetch(`${API}/api/agents/${id}/memories/${memId}`, {
+    const res = await fetch(`${API}/api/agents/${id}/memories/${memId}`, {
       method: 'DELETE',
       credentials: 'include',
     })
-    setMemories((prev) => prev.filter((m) => m.id !== memId))
+    if (res.ok) {
+      setMemories((prev) => prev.filter((m) => m.id !== memId))
+    } else {
+      setError('Failed to delete memory. Please try again.')
+    }
   }
 
   async function saveEmbeddingKey() {
@@ -277,6 +285,9 @@ export default function AgentPage() {
         setEmbeddingKey('')
         setEmbKeySaved(true)
         setTimeout(() => setEmbKeySaved(false), 2000)
+      } else {
+        const body = await res.json().catch(() => ({}))
+        setError((body as { detail?: string }).detail ?? 'Failed to save key.')
       }
     } finally {
       setSavingEmbKey(false)
