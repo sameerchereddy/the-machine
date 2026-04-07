@@ -5,6 +5,7 @@ Each tool is a pure async function returning a plain string result.
 
 import ast
 import asyncio
+import contextlib
 import ipaddress
 import math
 import re
@@ -446,10 +447,8 @@ async def tool_knowledge_search(query: str, ctx: ToolContext) -> str:
     except Exception as exc:
         return f"Error searching knowledge base: {exc}"
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await conn.close()
-        except Exception:
-            pass
 
     if not rows:
         return "No relevant information found in the knowledge base for that query."
@@ -505,10 +504,8 @@ async def tool_save_memory(content: str, memory_type: str, ctx: ToolContext) -> 
             expires_at,
         )
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await conn.close()
-        except Exception:
-            pass
 
     return f"Remembered: {content[:100]}"
 

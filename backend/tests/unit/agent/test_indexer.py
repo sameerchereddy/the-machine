@@ -5,13 +5,11 @@ Storage, OpenAI, and asyncpg are all mocked.
 
 from __future__ import annotations
 
-import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.agent.indexer import chunk_text, extract_text
-
 
 # ---------------------------------------------------------------------------
 # extract_text

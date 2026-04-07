@@ -52,7 +52,7 @@ def _parse_uuid(value: str, label: str) -> uuid.UUID:
     try:
         return uuid.UUID(value)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {label}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {label}") from None
 
 
 async def _require_agent(conn: asyncpg.Connection, agent_id: str, user_id: str) -> asyncpg.Record:
@@ -175,7 +175,7 @@ async def upload_knowledge_source(
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to decrypt LLM credentials.",
-                )
+                ) from None
         elif agent_row["embedding_api_key_enc"]:
             try:
                 emb_data = decrypt(
@@ -189,7 +189,7 @@ async def upload_knowledge_source(
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to decrypt embedding API key.",
-                )
+                ) from None
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

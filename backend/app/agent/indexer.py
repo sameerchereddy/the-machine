@@ -15,6 +15,7 @@ Pipeline:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import uuid
@@ -222,14 +223,12 @@ async def index_source(
             # ValueError messages are always our own, safe to surface
             safe_msg = str(exc)[:500]
         if conn:
-            try:
+            with contextlib.suppress(Exception):
                 await conn.execute(
                     "UPDATE knowledge_sources SET status='error', error_message=$1, updated_at=now() WHERE id=$2",
                     safe_msg,
                     uuid.UUID(source_id),
                 )
-            except Exception:
-                pass
     finally:
         if conn and not conn.is_closed():
             await conn.close()
