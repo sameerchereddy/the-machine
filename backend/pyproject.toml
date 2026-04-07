@@ -37,6 +37,10 @@ dependencies = [
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",    # url_reader tool
 
+    # Document text extraction (knowledge base indexing)
+    "pypdf>=4.3.0",
+    "python-docx>=1.1.0",
+
     # Utils
     "python-jose[cryptography]>=3.3.0",
 ]
@@ -95,6 +99,16 @@ disable_error_code = ["index", "union-attr", "arg-type", "return-value"]
 # asyncpg Connection + WebSocket generics are untyped
 module = "app.api.run"
 disable_error_code = ["union-attr", "arg-type", "assignment"]
+
+[[tool.mypy.overrides]]
+# asyncpg Record subscript access + supabase SDK untyped
+module = "app.api.knowledge"
+disable_error_code = ["index", "union-attr", "arg-type", "return-value"]
+
+[[tool.mypy.overrides]]
+# pypdf / python-docx / supabase have incomplete stubs
+module = "app.agent.indexer"
+ignore_errors = true
 
 [[tool.mypy.overrides]]
 # agent loop: asyncio.gather return type is heterogeneous tuple

@@ -27,6 +27,7 @@ import asyncpg
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.agent.loop import msg_done, msg_error, msg_stopped, run_react_loop
+from app.agent.tools import ToolContext
 from app.core.config import settings
 from app.core.encryption import decrypt
 from app.core.security import verify_token
@@ -134,6 +135,55 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
         decrypted["model"] = str(llm_config["model"])
         decrypted["supports_tool_calls"] = bool(llm_config["supports_tool_calls"])
 
+        # ── Knowledge Base setup ─────────────────────────────────────────────
+        # OpenAI agents reuse their LLM key; other providers need a stored OpenAI fallback key.
+        embedding_api_key: str | None = None
+        if decrypted.get("provider") == "openai":
+            embedding_api_key = str(decrypted.get("api_key") or "") or None
+        elif agent.get("embedding_api_key_enc") and agent.get("embedding_api_key_iv"):
+            try:
+                emb_data = decrypt(
+                    bytes(agent["embedding_api_key_enc"]),
+                    bytes(agent["embedding_api_key_iv"]),
+                    user_id,
+                    str(agent["id"]),
+                )
+                embedding_api_key = str(emb_data["api_key"])
+            except Exception:
+                logger.warning("Failed to decrypt embedding key for agent %s", agent_id)
+
+        has_kb_sources: bool = bool(await db_conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM knowledge_sources WHERE agent_id=$1 AND status='ready')",
+            agent_uid,
+        ))
+
+        # ── Long-term memories ───────────────────────────────────────────────
+        memories: list[dict[str, Any]] = []
+        if agent.get("long_term_enabled"):
+            mem_rows = await db_conn.fetch(
+                """SELECT content, memory_type FROM agent_memories
+                   WHERE agent_id=$1 AND user_id=$2
+                     AND (expires_at IS NULL OR expires_at > now())
+                   ORDER BY created_at DESC
+                   LIMIT $3""",
+                agent_uid,
+                uuid.UUID(user_id),
+                int(agent.get("max_memories") or 20),
+            )
+            memories = [dict(r) for r in mem_rows]
+
+        tool_context = ToolContext(
+            agent_id=str(agent_uid),
+            user_id=user_id,
+            database_url=str(settings.database_url),
+            embedding_api_key=embedding_api_key,
+            top_k=int(agent.get("kb_top_k") or 4),
+            similarity_threshold=float(agent.get("kb_similarity_threshold") or 0.7),
+            max_memories=int(agent.get("max_memories") or 20),
+            retention_days=int(agent.get("retention_days") or 90),
+            kb_show_sources=bool(agent.get("kb_show_sources", True)),
+        )
+
         adapter = build_adapter(decrypted)
         stopped_event = asyncio.Event()
         is_running = False
@@ -180,6 +230,9 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
                     user_message=user_message,
                     send=send,
                     stopped_event=stopped_event,
+                    tool_context=tool_context,
+                    memories=memories,
+                    has_kb_sources=has_kb_sources,
                 )
             finally:
                 is_running = False

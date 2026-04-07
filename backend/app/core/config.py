@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     server_secret: str
     storage_bucket: str = "knowledge"
     database_url: str | None = None  # postgres://... required for migrations + direct DB access
+    max_kb_file_size_mb: int = 20    # configurable via MAX_KB_FILE_SIZE_MB env var
 
     # CORS — tighten in production
     allowed_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
