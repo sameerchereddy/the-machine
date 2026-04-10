@@ -9,6 +9,7 @@ from app.api.auth import router as auth_router
 from app.api.knowledge import router as knowledge_router
 from app.api.llm_configs import router as llm_configs_router
 from app.api.run import router as run_router
+from app.api.traces import router as traces_router
 from app.core.config import settings
 from app.core.migrations import run_pending_migrations
 
@@ -39,6 +40,7 @@ app.include_router(llm_configs_router)
 app.include_router(agents_router)
 app.include_router(knowledge_router)
 app.include_router(run_router)
+app.include_router(traces_router)
 
 
 @app.get("/health", tags=["system"])

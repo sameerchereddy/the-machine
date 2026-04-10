@@ -223,6 +223,14 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
             stopped_event.clear()
             is_running = True
             try:
+                # Fetch enabled tools from DB (None if no rows → fallback to all tools)
+                tool_cfg_rows = await db_conn.fetch(
+                    "SELECT tool_key FROM agent_tools WHERE agent_id=$1 AND enabled=true",
+                    agent_uid,
+                )
+                enabled_tool_keys: set[str] | None = (
+                    {r["tool_key"] for r in tool_cfg_rows} if tool_cfg_rows else None
+                )
                 trace = await run_react_loop(
                     agent=agent,
                     llm_config=decrypted,
@@ -233,6 +241,7 @@ async def run_agent_ws(websocket: WebSocket, agent_id: str) -> None:
                     tool_context=tool_context,
                     memories=memories,
                     has_kb_sources=has_kb_sources,
+                    enabled_tool_keys=enabled_tool_keys,
                 )
             finally:
                 is_running = False
