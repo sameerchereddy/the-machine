@@ -518,6 +518,22 @@ async def _save_memory(content: str, memory_type: str, ctx: ToolContext) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Lookup helpers for the API layer
+# ---------------------------------------------------------------------------
+
+TOOL_SCHEMA_BY_KEY: dict[str, dict] = {
+    s["function"]["name"]: s for s in TOOL_SCHEMAS
+}
+
+DEFAULT_TOOL_ROWS = [
+    {"tool_key": "calculator",       "name": "Calculator",   "description": "Evaluates a mathematical expression and returns the result. Use for any arithmetic, percentages, or unit conversions.", "enabled": True,  "sort_order": 0},
+    {"tool_key": "current_datetime", "name": "Date & Time",  "description": "Returns the current UTC date and time. Use for any questions about the current date, time, or time-based calculations.", "enabled": True,  "sort_order": 1},
+    {"tool_key": "url_reader",       "name": "URL Reader",   "description": "Fetches a URL and extracts clean text content. Use when the user provides a URL to summarise or analyse.", "enabled": True,  "sort_order": 2},
+    {"tool_key": "wikipedia_search", "name": "Wikipedia",    "description": "Searches Wikipedia and returns the top article summary. Use for factual questions about people, places, concepts, or history.", "enabled": True,  "sort_order": 3},
+    {"tool_key": "web_search",       "name": "Web Search",   "description": "Searches the web for real-time information. Use for current events, recent data, or anything not in training data.", "enabled": True,  "sort_order": 4},
+]
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 

@@ -224,6 +224,8 @@ async def _check_llm_config_owner(
 
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent(body: AgentCreate, current_user: CurrentUser) -> AgentResponse:
+    from app.agent.tools import DEFAULT_TOOL_ROWS
+
     user_id = current_user["id"]
     llm_config_uid = _parse_uuid(body.llm_config_id) if body.llm_config_id else None
     conn = await _get_conn()
@@ -240,6 +242,14 @@ async def create_agent(body: AgentCreate, current_user: CurrentUser) -> AgentRes
             body.name,
             llm_config_uid,
         )
+        agent_uid_val = row["id"]
+        for t in DEFAULT_TOOL_ROWS:
+            await conn.execute(
+                """INSERT INTO agent_tools (id, agent_id, user_id, tool_key, name, description, parameters, enabled, sort_order)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+                uuid.uuid4(), agent_uid_val, uuid.UUID(user_id),
+                t["tool_key"], t["name"], t["description"], {}, t["enabled"], t["sort_order"],
+            )
         return _row_to_response(row)
     finally:
         await conn.close()
@@ -478,6 +488,31 @@ async def _assert_agent_owner(conn: asyncpg.Connection, agent_id: str, user_id: 
     )
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+
+@router.post("/{agent_id}/tools/seed-defaults", status_code=status.HTTP_204_NO_CONTENT)
+async def seed_default_tools(agent_id: str, current_user: CurrentUser) -> None:
+    """Seed default tools for agents created before auto-seeding was added."""
+    from app.agent.tools import DEFAULT_TOOL_ROWS
+    user_id = current_user["id"]
+    agent_uid = _parse_uuid(agent_id)
+    conn = await _get_conn()
+    try:
+        await _assert_agent_owner(conn, agent_id, user_id)
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM agent_tools WHERE agent_id=$1", agent_uid
+        )
+        if count == 0:
+            for t in DEFAULT_TOOL_ROWS:
+                await conn.execute(
+                    """INSERT INTO agent_tools
+                       (id, agent_id, user_id, tool_key, name, description, parameters, enabled, sort_order)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+                    uuid.uuid4(), agent_uid, uuid.UUID(user_id),
+                    t["tool_key"], t["name"], t["description"], {}, t["enabled"], t["sort_order"],
+                )
+    finally:
+        await conn.close()
 
 
 @router.get("/{agent_id}/tools", response_model=list[ToolResponse])
