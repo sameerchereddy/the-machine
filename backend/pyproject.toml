@@ -35,7 +35,7 @@ dependencies = [
 
     # HTTP client (tools + internal)
     "httpx>=0.27.0",
-    "beautifulsoup4>=4.12.0",    # url_reader tool
+    "beautifulsoup4>=4.14.3",    # url_reader tool
 
     # Document text extraction (knowledge base indexing)
     "pypdf>=4.3.0",
