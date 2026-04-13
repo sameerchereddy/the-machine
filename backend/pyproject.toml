@@ -30,7 +30,7 @@ dependencies = [
     # LLM provider SDKs
     "openai>=1.45.0",
     "anthropic>=0.34.0",
-    "google-generativeai>=0.8.0",
+    "google-generativeai>=0.8.6",
     "aiobotocore>=2.15.0",
 
     # HTTP client (tools + internal)
